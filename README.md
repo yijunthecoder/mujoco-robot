@@ -16,9 +16,12 @@ mujoco-robots/
 │   ├── models.py     # finds mujoco_menagerie, resolves model name -> scene.xml
 │   └── viewer.py     # load()/view() helpers
 │   └── pick_place.py  # damped-least-squares IK + scripted pick-and-place motion
+│   └── stationlite_pick_place.py  # two-arm block-stacking demo (stationlite robot)
 ├── scripts/
-│   ├── view.py         # CLI entry point
-│   └── pick_place.py   # CLI entry point for the pick-and-place demo
+│   ├── view.py                    # CLI entry point (menagerie robots by name)
+│   ├── view_file.py                # CLI entry point (any .urdf/.xml by path)
+│   ├── pick_place.py                # CLI entry point for the Panda pick-and-place demo
+│   └── stationlite_pick_place.py     # CLI entry point for the stationlite stacking demo
 └── requirements.txt
 ```
 
@@ -59,6 +62,30 @@ sequence of Cartesian waypoints (approach, descend, grasp, lift, transport,
 place, retreat), ramping the joint-position actuators (`data.ctrl`) toward
 each solved pose so MuJoCo's own physics — not a scripted teleport — carries
 the cube. It prints how far the cube ended up from the target when done.
+
+## Stationlite two-arm block-stacking demo
+
+The stationlite dual-arm robot's files live in `stationlite/` (URDF +
+meshes, ~24MB, tracked in this repo). `stationlite/urdf/stationlite_pick_place.xml`
+wraps the URDF with actuators, a table, two blocks, and camera viewpoints.
+
+```bash
+python scripts/stationlite_pick_place.py    # right arm places its block at the
+                                             # middle, left arm stacks its own on top
+python scripts/view_file.py stationlite/urdf/stationlite_pick_place.xml
+                                             # just look around / try the cameras
+                                             # (Tab for the side panel, or press [ / ]
+                                             # to cycle: free cam, headcam, refcam,
+                                             # left_handcam, right_handcam)
+```
+
+Waypoints are joint angles found by an offline forward-kinematics search
+against the robot (not solved via IK at runtime — its kinematic conventions
+weren't known going in). Grasping is a kinematic "carry" rather than pure
+friction: once a gripper closes on its block, the block's position is
+snapped to the fingertip midpoint each step until release — the mesh-only
+finger geometry isn't reliable enough to hold an object through arm motion
+on its own (confirmed experimentally).
 
 ## Rendering fallback
 

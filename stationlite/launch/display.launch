@@ -1,0 +1,35 @@
+<launch>
+  <arg name="model" default="$(find stationlite)/urdf/stationlite.urdf" />
+  <arg name="use_gui" default="true" />
+  <arg name="use_rviz" default="true" />
+
+  <param name="robot_description" textfile="$(arg model)" />
+
+  <node
+    if="$(arg use_gui)"
+    name="joint_state_publisher_gui"
+    pkg="joint_state_publisher_gui"
+    type="joint_state_publisher_gui"
+    output="screen" />
+
+  <node
+    unless="$(arg use_gui)"
+    name="joint_state_publisher"
+    pkg="joint_state_publisher"
+    type="joint_state_publisher"
+    output="screen" />
+
+  <node
+    name="robot_state_publisher"
+    pkg="robot_state_publisher"
+    type="robot_state_publisher"
+    output="screen" />
+
+  <node
+    if="$(arg use_rviz)"
+    name="rviz"
+    pkg="rviz"
+    type="rviz"
+    args="-d $(find stationlite)/config/stationlite.rviz"
+    output="screen" />
+</launch>

@@ -1,0 +1,105 @@
+<mujoco model="stationlite_pick_place">
+  <!-- implicitfast: the arm's light distal links (small inertia) combined
+       with stiff position-actuator gains give a natural frequency too high
+       for the default explicit integrator at this timestep, causing
+       oscillation that blows up rather than settling. -->
+  <option integrator="implicitfast"/>
+
+  <!-- Arm link/finger STL meshes are used directly as collision geometry (no
+       simplified collision shapes were provided), which self-collides badly
+       at many poses and injects huge spurious contact forces. contype=2/
+       conaffinity=1 on the arm (vs. contype=1/conaffinity=1 on table/ball
+       below) means arm-vs-arm pairs never collide, while arm-vs-world still
+       does: (2 & 1)=0 both ways for arm-arm, but world's contype(1) matches
+       arm's conaffinity(1) for arm-world. -->
+  <default>
+    <geom contype="2" conaffinity="1"/>
+  </default>
+
+  <include file="stationlite_converted.xml"/>
+
+  <statistic center="0.2 0 0.3" extent="1"/>
+
+  <visual>
+    <headlight ambient="0.3 0.3 0.3"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.0"/>
+    <material name="table_mat" rgba="0.55 0.4 0.28 1"/>
+    <material name="block_right_mat" rgba="0.85 0.55 0.1 1"/>
+    <material name="block_left_mat" rgba="0.15 0.45 0.85 1"/>
+    <material name="target_mat" rgba="0.1 0.8 0.1 0.35"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" directional="true"/>
+
+    <!-- Matches the headcam/refcam mesh geoms' own pos/quat (fused to
+         worldbody since their URDF mount joints are fixed). -->
+    <camera name="headcam" pos="0.02402 0 0.78133" quat="0.854912 0 0.518773 0" fovy="60"/>
+    <camera name="refcam" pos="0.03987 0 0.9764" quat="0.793353 0 0.608761 0" fovy="60"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="groundplane" pos="0 0 -0.9" contype="1" conaffinity="1"/>
+
+    <!-- A long shared workbench alongside the station (starts at x=0.15 to
+         clear the base mast's footprint, spans both arms' sides in y). Same
+         top height as before (-0.1226) - that height is calibrated to the
+         arm's low-torque reach, not to the robot's own base/mount height
+         (see the mounting-orientation note above the <default> block). -->
+    <body name="table" pos="0.525 0 -0.2726">
+      <geom name="table_top" type="box" size="0.375 0.5 0.15" material="table_mat" contype="1" conaffinity="1"/>
+    </body>
+
+    <!-- One block starts in front of each arm's natural reach (matches each
+         arm's own grasp waypoint below exactly). Right's is the bottom block
+         (placed at the middle first); left's stacks on top of it. -->
+    <body name="block_right" pos="0.522 -0.3175 -0.1026">
+      <freejoint/>
+      <geom name="block_right" type="box" size="0.02 0.02 0.02" material="block_right_mat" mass="0.05"
+        friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="block_left" pos="0.522 0.3175 -0.1026">
+      <freejoint/>
+      <geom name="block_left" type="box" size="0.02 0.02 0.02" material="block_left_mat" mass="0.05"
+        friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+    </body>
+
+    <!-- Middle stacking point: (0.4148, 0, table height), reachable by both
+         arms at j1 = -+0.653346 (found by search - see stationlite_stack.py). -->
+    <site name="target_site" pos="0.4148 0 -0.1216" size="0.03 0.001" type="cylinder" rgba="0.1 0.8 0.1 0.35"/>
+  </worldbody>
+
+  <actuator>
+    <position name="left_act1" joint="left_joint1" kp="1350" kv="135" ctrlrange="-2.824 2.824"/>
+    <position name="left_act2" joint="left_joint2" kp="1350" kv="135" ctrlrange="-0.209 3.508"/>
+    <position name="left_act3" joint="left_joint3" kp="1350" kv="135" ctrlrange="-3.193 0"/>
+    <position name="left_act4" joint="left_joint4" kp="350" kv="35" ctrlrange="-1.71 1.71"/>
+    <position name="left_act5" joint="left_joint5" kp="625" kv="62" ctrlrange="-1.71 1.71"/>
+    <position name="left_act6" joint="left_joint6" kp="625" kv="62" ctrlrange="-2.856 2.856"/>
+    <position name="left_gripper1" joint="left_gripper_joint1" kp="500" kv="15" ctrlrange="-0.0425 0"/>
+    <position name="left_gripper2" joint="left_gripper_joint2" kp="500" kv="15" ctrlrange="0 0.0425"/>
+
+    <position name="right_act1" joint="right_joint1" kp="1350" kv="135" ctrlrange="-2.824 2.824"/>
+    <position name="right_act2" joint="right_joint2" kp="1350" kv="135" ctrlrange="-0.209 3.508"/>
+    <position name="right_act3" joint="right_joint3" kp="1350" kv="135" ctrlrange="-3.193 0"/>
+    <position name="right_act4" joint="right_joint4" kp="350" kv="35" ctrlrange="-1.71 1.71"/>
+    <position name="right_act5" joint="right_joint5" kp="625" kv="62" ctrlrange="-1.71 1.71"/>
+    <position name="right_act6" joint="right_joint6" kp="625" kv="62" ctrlrange="-2.856 2.856"/>
+    <position name="right_gripper1" joint="right_gripper_joint1" kp="500" kv="15" ctrlrange="-0.0425 0"/>
+    <position name="right_gripper2" joint="right_gripper_joint2" kp="500" kv="15" ctrlrange="0 0.0425"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home"
+      qpos="0 1.98 -1.37 0 0 0 -0.0425 0.0425
+            0 1.98 -1.37 0 0 0 -0.0425 0.0425
+            0.522 -0.3175 -0.1026 1 0 0 0
+            0.522 0.3175 -0.1026 1 0 0 0"
+      ctrl="0 1.98 -1.37 0 0 0 -0.0425 0.0425
+            0 1.98 -1.37 0 0 0 -0.0425 0.0425"/>
+  </keyframe>
+</mujoco>
