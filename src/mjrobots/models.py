@@ -5,19 +5,28 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Checked in order. Set MENAGERIE_ROOT to override without editing this file.
-_CANDIDATE_ROOTS = [
-    os.environ.get("MENAGERIE_ROOT"),
-    "/mnt/c/Users/pokem/mujoco_test/mujoco_menagerie",  # WSL2 view of the Windows clone
-    r"C:\Users\pokem\mujoco_test\mujoco_menagerie",  # native Windows view
-    os.path.expanduser("~/mujoco_test/mujoco_menagerie"),  # native WSL clone, if any
-]
+def _candidate_roots() -> list[Path]:
+    """Checked in order. Set MENAGERIE_ROOT to override without editing this file.
+
+    No hardcoded username: a clone at .../Users/<anyone>/mujoco_test/
+    mujoco_menagerie is found via a wildcard glob instead, so this works for
+    whoever clones the repo, not just the machine it was written on. Both
+    glob patterns are harmless no-ops on a platform where that root doesn't
+    exist (e.g. the C:\\Users pattern under native Linux) - Path.glob()
+    simply yields nothing rather than raising.
+    """
+    env = os.environ.get("MENAGERIE_ROOT")
+    candidates: list[Path] = [Path(env)] if env else []
+    candidates += sorted(Path("/mnt/c/Users").glob("*/mujoco_test/mujoco_menagerie"))
+    candidates += sorted(Path(r"C:\Users").glob("*/mujoco_test/mujoco_menagerie"))
+    candidates.append(Path(os.path.expanduser("~/mujoco_test/mujoco_menagerie")))
+    return candidates
 
 
 def menagerie_root() -> Path:
-    for candidate in _CANDIDATE_ROOTS:
-        if candidate and Path(candidate).is_dir():
-            return Path(candidate)
+    for candidate in _candidate_roots():
+        if candidate.is_dir():
+            return candidate
     raise FileNotFoundError(
         "Could not find mujoco_menagerie in any known location. "
         "Set the MENAGERIE_ROOT environment variable to its path."
