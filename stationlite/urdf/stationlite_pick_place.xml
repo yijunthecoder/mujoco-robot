@@ -40,8 +40,14 @@
 
     <!-- Matches the headcam/refcam mesh geoms' own pos/quat (fused to
          worldbody since their URDF mount joints are fixed). -->
-    <camera name="headcam" pos="0.02402 0 0.78133" quat="0.854912 0 0.518773 0" fovy="60"/>
-    <camera name="refcam" pos="0.03987 0 0.9764" quat="0.793353 0 0.608761 0" fovy="60"/>
+    <!-- Position matches the headcam/refcam mesh geoms (fused to worldbody
+         since their URDF mount joints are fixed), but quat is NOT copied
+         from the mesh - that was tried first and pointed 90-99 degrees away
+         from the workspace (verified numerically, not just by eye). This
+         quat is a proper look-at computed toward the shared middle/table
+         point (0.4148, 0, -0.1026), with world +Z as the up reference. -->
+    <camera name="headcam" pos="0.02402 0 0.78133" quat="0.69184675 0.14610982 -0.14610982 -0.69184675" fovy="60"/>
+    <camera name="refcam" pos="0.03987 0 0.9764" quat="0.6972443 0.11768768 -0.11768768 -0.6972443" fovy="60"/>
     <geom name="floor" type="plane" size="2 2 0.05" material="groundplane" pos="0 0 -0.9" contype="1" conaffinity="1"/>
 
     <!-- A long shared workbench alongside the station (starts at x=0.15 to

@@ -48,7 +48,11 @@
                 <joint name="left_joint6" range="-2.856 2.856" actuatorfrcrange="-12.5 12.5" axis="1 0 0"/>
                 <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="gripper_base"/>
                 <geom pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="handcam"/>
-                <camera name="left_handcam" pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" fovy="60"/>
+                <!-- quat is a look-at computed in this body's local frame,
+                     toward (0.1733,0,0) where the fingers attach - not the
+                     mesh's own transform, which pointed 50+ degrees away
+                     from anything grasped (verified numerically). -->
+                <camera name="left_handcam" pos="0.037112 0 0.100137" quat="0.89229639 0 -0.45145005 0" fovy="60"/>
                 <body name="left_griperlj_link1" pos="0.1733 0 0">
                   <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="left_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
@@ -90,7 +94,7 @@
                 <joint name="right_joint6" range="-2.856 2.856" actuatorfrcrange="-12.5 12.5" axis="1 0 0"/>
                 <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="gripper_base"/>
                 <geom pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="handcam"/>
-                <camera name="right_handcam" pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" fovy="60"/>
+                <camera name="right_handcam" pos="0.037112 0 0.100137" quat="0.89229639 0 -0.45145005 0" fovy="60"/>
                 <body name="right_griperlj_link1" pos="0.1733 0 0">
                   <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="right_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
