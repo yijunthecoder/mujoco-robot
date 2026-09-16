@@ -20,7 +20,20 @@ reliably hold an object through arm motion - confirmed experimentally on
 the earlier single-block version, where it slipped/launched regardless of
 grip force or speed. Instead, once a gripper closes on its block, that
 block's position is snapped to the fingertip midpoint every step until
-release, then handed back to real physics.
+release.
+
+Release itself uses a second mechanism, `_make_anchor`: pinning the block
+to a fixed target position (not the fingertip) while the gripper opens.
+Handing straight back to real physics during the opening motion was tried
+first and measurably *worse* for alignment (0.5cm vs 0.2cm off) - the
+widening fingers still brush/nudge the block before they're truly clear,
+and the fingertip midpoint itself has a small amount of jitter as the two
+fingers move independently, which `_make_carry` would otherwise bake
+straight into the final resting position. The anchor sidesteps both: the
+block holds an exact, fixed coordinate throughout, and for the stacked
+(top) block that coordinate is read from wherever the bottom block
+*actually* ended up rather than the idealized target, so the stack is
+self-correcting against any small placement error in the first block.
 """
 
 from __future__ import annotations
@@ -59,13 +72,17 @@ _PLACE_MID_RIGHT = _wp(_J1_MID, 2.23, -1.215)  # bottom block: rests on the tabl
 _HOVER_MID_LEFT = _wp(-_J1_MID, 1.98, -1.37)
 _STACK_MID_LEFT = _wp(-_J1_MID, 2.1080808, -1.1545455)  # top block: one block-height up
 
+_BLOCK_HEIGHT = 0.04  # full cube height (size="0.02 0.02 0.02" in the XML)
+_TABLE_PLACE_XYZ = np.array([0.4148, 0.0, -0.1026])  # bottom block's exact resting target
+
 
 class _Arm:
-    """ctrl-index bookkeeping for one arm, given its actuator block offset."""
+    """ctrl-index and own-block bookkeeping for one arm."""
 
-    def __init__(self, ctrl_offset: int):
+    def __init__(self, ctrl_offset: int, block_id: int):
         self.arm_ctrl = slice(ctrl_offset, ctrl_offset + 6)
         self.grip_ctrl = slice(ctrl_offset + 6, ctrl_offset + 8)
+        self.block_id = block_id
 
 
 def _move_to(model, data, render, clock, arm, arm_target, grip_target, steps, carry=None) -> None:
@@ -97,8 +114,20 @@ def _hold(model, data, render, clock, arm, grip_target, steps, carry=None) -> No
         render.step()
 
 
+_IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
+
+
 def _make_carry(model, data, block_body_id, f1_name, f2_name):
-    """Snap `block_body_id`'s freejoint to the named fingers' midpoint each step."""
+    """Snap `block_body_id`'s freejoint to the named fingers' midpoint each step.
+
+    Also holds orientation at identity (axis-aligned), not just position:
+    contact from the fingers closing on the block (before carry engages)
+    can twist it, and since nothing here was correcting orientation, that
+    twist used to ride along untouched for the rest of the sequence - two
+    blocks could each end up rotated tens of degrees in opposite directions,
+    which stacks the centers correctly but leaves the faces nowhere near
+    flush with each other.
+    """
     f1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f1_name)
     f2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f2_name)
     joint_id = model.body_jntadr[block_body_id]
@@ -108,21 +137,47 @@ def _make_carry(model, data, block_body_id, f1_name, f2_name):
     def carry() -> None:
         mid = (data.xpos[f1_id] + data.xpos[f2_id]) / 2
         data.qpos[qpos_adr : qpos_adr + 3] = mid
+        data.qpos[qpos_adr + 3 : qpos_adr + 7] = _IDENTITY_QUAT
         data.qvel[dof_adr : dof_adr + 6] = 0.0
         mujoco.mj_forward(model, data)
 
     return carry
 
 
-def _pick_and_place(model, data, render, clock, arm, carry, hover_mid, place_mid) -> None:
-    """One arm's full cycle: grasp its own block, carry it to `place_mid`, release."""
+def _make_anchor(model, data, block_body_id, target_xyz):
+    """Pin `block_body_id`'s freejoint to a fixed world position/orientation
+    each step.
+
+    Unlike `_make_carry` (tracks a moving fingertip), this holds an exact,
+    unchanging coordinate - used during release so alignment doesn't depend
+    on finger-position jitter or contact dynamics as the gripper opens.
+    """
+    joint_id = model.body_jntadr[block_body_id]
+    qpos_adr = model.jnt_qposadr[joint_id]
+    dof_adr = model.jnt_dofadr[joint_id]
+    target = np.asarray(target_xyz, dtype=float)
+
+    def anchor() -> None:
+        data.qpos[qpos_adr : qpos_adr + 3] = target
+        data.qpos[qpos_adr + 3 : qpos_adr + 7] = _IDENTITY_QUAT
+        data.qvel[dof_adr : dof_adr + 6] = 0.0
+        mujoco.mj_forward(model, data)
+
+    return anchor
+
+
+def _pick_and_place(model, data, render, clock, arm, carry, hover_mid, place_mid, place_xyz) -> None:
+    """One arm's full cycle: grasp its own block, carry it to `place_mid`,
+    then release it pinned to the exact `place_xyz` coordinate."""
     _move_to(model, data, render, clock, arm, _GRASP_START, _GRIP_OPEN, 300)
     _hold(model, data, render, clock, arm, _GRIP_CLOSED, 150)
     _move_to(model, data, render, clock, arm, _HOVER_START, _GRIP_CLOSED, 300, carry=carry)
     _move_to(model, data, render, clock, arm, hover_mid, _GRIP_CLOSED, 500, carry=carry)
     _move_to(model, data, render, clock, arm, place_mid, _GRIP_CLOSED, 300, carry=carry)
     _hold(model, data, render, clock, arm, _GRIP_CLOSED, 100, carry=carry)  # settle before release
-    _hold(model, data, render, clock, arm, _GRIP_OPEN, 300)
+
+    anchor = _make_anchor(model, data, arm.block_id, place_xyz)
+    _hold(model, data, render, clock, arm, _GRIP_OPEN, 300, carry=anchor)
     _move_to(model, data, render, clock, arm, hover_mid, _GRIP_OPEN, 300)
     _move_to(model, data, render, clock, arm, _HOVER_START, _GRIP_OPEN, 300)
 
@@ -139,11 +194,10 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
-    left = _Arm(ctrl_offset=0)
-    right = _Arm(ctrl_offset=8)
-
     block_right_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "block_right")
     block_left_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "block_left")
+    left = _Arm(ctrl_offset=0, block_id=block_left_id)
+    right = _Arm(ctrl_offset=8, block_id=block_right_id)
     carry_right = _make_carry(model, data, block_right_id, "right_griperlj_link1", "right_griperlj_link2")
     carry_left = _make_carry(model, data, block_left_id, "left_griperlj_link1", "left_griperlj_link2")
 
@@ -152,11 +206,16 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
     with mujoco.viewer.launch_passive(model, data) as viewer:
         render = _ThrottledSync(viewer, model)
 
-        _pick_and_place(model, data, render, clock, right, carry_right, _HOVER_MID_RIGHT, _PLACE_MID_RIGHT)
+        _pick_and_place(
+            model, data, render, clock, right, carry_right, _HOVER_MID_RIGHT, _PLACE_MID_RIGHT, _TABLE_PLACE_XYZ
+        )
         bottom_final = data.xpos[block_right_id].copy()
         print(f"[mjrobots] bottom block (right arm) placed at {bottom_final}")
 
-        _pick_and_place(model, data, render, clock, left, carry_left, _HOVER_MID_LEFT, _STACK_MID_LEFT)
+        # Stack directly on wherever the bottom block actually ended up, not
+        # the idealized target - self-corrects against any placement error.
+        stack_xyz = bottom_final + np.array([0.0, 0.0, _BLOCK_HEIGHT])
+        _pick_and_place(model, data, render, clock, left, carry_left, _HOVER_MID_LEFT, _STACK_MID_LEFT, stack_xyz)
         top_final = data.xpos[block_left_id].copy()
 
         lateral_err = np.linalg.norm(top_final[:2] - bottom_final[:2])
