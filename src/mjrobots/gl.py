@@ -25,6 +25,7 @@ _PROBE_XML = """
 
 
 def _probe_renders(backend: str) -> bool:
+    """Try to actually create an offscreen context with `backend`."""
     os.environ["MUJOCO_GL"] = backend
     try:
         import mujoco
@@ -38,13 +39,23 @@ def _probe_renders(backend: str) -> bool:
 
 
 def configure_gl(prefer: str = "egl", verbose: bool = True) -> str:
+    """Pick a MuJoCo rendering backend, falling back to software if needed.
+
+    Respects an already-set ``MUJOCO_GL`` / ``LIBGL_ALWAYS_SOFTWARE`` so a
+    per-run override (e.g. ``MUJOCO_GL=osmesa python scripts/view.py ...``)
+    still wins. Otherwise tries `prefer` (hardware-accelerated), and falls
+    back to forced software rendering if that backend can't actually render.
+
+    Returns the backend name that ended up selected, for logging.
+    """
     if os.environ.get("MUJOCO_GL") or os.environ.get("LIBGL_ALWAYS_SOFTWARE") == "1":
         backend = os.environ.get("MUJOCO_GL", "libgl_software")
         if verbose:
             print(f"[mjrobots] using pre-set rendering backend: {backend}")
         return backend
 
-    if _probe_renders(prefer): """" reaches this line if nothing was preset """"
+    # reaches this line if nothing was preset
+    if _probe_renders(prefer):
         if verbose:
             print(f"[mjrobots] rendering backend: {prefer} (hardware)")
         return prefer
