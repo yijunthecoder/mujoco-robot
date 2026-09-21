@@ -28,10 +28,9 @@ Method:
      cameras that saw the block disagree.
 
 The camera measurements are synthesized (pinhole projection of the block's true
-position + pixel/depth noise) instead of rendered from images: offscreen
-rendering is unreliable on this WSLg/D3D12 setup (see the project notes), and
-the calibration maths only needs "pixel + depth" per camera, which is exactly
-what a real detector plus depth sensor would supply. The *solver* never sees
+position + pixel/depth noise) instead of rendered from images. The calibration
+maths only needs "pixel + depth" per camera, which is exactly what a real
+detector plus depth sensor would supply. The *solver* never sees
 any ground truth; MuJoCo's true camera poses are used only to synthesize the
 measurements and afterwards to grade the result.
 
@@ -205,52 +204,6 @@ class SimulatedCameras:
         return intr.back_project(u, v, depth)
 
 
-class RenderedCameras(SimulatedCameras):
-    """The real thing: render each camera's image + depth map and detect the block in it.
-
-    Detection is colour-based (the block is saturated orange, the table is a
-    duller brown-orange): threshold hue/saturation, take the centroid of the
-    blob as the block's pixel, and read the depth map under the blob. The depth
-    map sees the block's near *surface*, so the block's centre is taken to be
-    half a block-edge further along the view axis (its size is known).
-    Occlusion, field of view and shading all come from the actual render, so
-    the noise arguments are ignored - the detector has its own natural error.
-    """
-
-    _BLOCK_HALF_EDGE = 0.02  # matches the box geom's size in the scene XML
-    _MIN_PIXELS = 30
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        h, w = IMAGE_SIZE[1], IMAGE_SIZE[0]
-        self._rgb_renderer = mujoco.Renderer(self.model, h, w)
-        self._depth_renderer = mujoco.Renderer(self.model, h, w)
-        self._depth_renderer.enable_depth_rendering()
-
-    @staticmethod
-    def _orange_mask(rgb: np.ndarray) -> np.ndarray:
-        x = rgb.astype(float) / 255
-        mx, mn = x.max(axis=2), x.min(axis=2)
-        chroma = np.maximum(mx - mn, 1e-6)
-        sat = (mx - mn) / np.maximum(mx, 1e-6)
-        r, g, b = x[..., 0], x[..., 1], x[..., 2]
-        hue = np.where(mx == r, ((g - b) / chroma) % 6, np.where(mx == g, (b - r) / chroma + 2, (r - g) / chroma + 4)) * 60
-        return (sat > 0.7) & (hue > 20) & (hue < 65) & (mx > 0.3)
-
-    def observe(self, name: str, noisy: bool = True) -> np.ndarray | None:
-        self._rgb_renderer.update_scene(self.data, camera=name)
-        mask = self._orange_mask(self._rgb_renderer.render())
-        if mask.sum() < self._MIN_PIXELS:
-            return None
-        rows, cols = np.nonzero(mask)
-        if rows.min() == 0 or cols.min() == 0 or rows.max() == mask.shape[0] - 1 or cols.max() == mask.shape[1] - 1:
-            return None  # block cut off by the image edge: centroid would be biased
-        self._depth_renderer.update_scene(self.data, camera=name)
-        depth = np.median(self._depth_renderer.render()[mask]) + self._BLOCK_HALF_EDGE
-        # +0.5: a pixel's centre is half a pixel in from its index.
-        return self.intrinsics[name].back_project(cols.mean() + 0.5, rows.mean() + 0.5, depth)
-
-
 def _setup_home_pose(model: mujoco.MjModel, data: mujoco.MjData) -> None:
     """Arms at their original home pose; the spare block parked out of the way."""
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
@@ -375,21 +328,16 @@ def run_calibration(
     seed: int = 0,
     view: bool = False,
     prefer_gl: str = "egl",
-    render: bool = False,
 ) -> None:
-    if render or view:
-        configure_gl(prefer_gl)  # must happen before any Renderer / viewer is created
+    if view:
+        configure_gl(prefer_gl)  # must happen before the viewer is created
     model = mujoco.MjModel.from_xml_path(str(scene_path or _DEFAULT_SCENE))
     data = mujoco.MjData(model)
     _setup_home_pose(model, data)
     rng = np.random.default_rng(seed)
-    camera_class = RenderedCameras if render else SimulatedCameras
-    cams = camera_class(model, data, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=rng)
+    cams = SimulatedCameras(model, data, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=rng)
 
-    if render:
-        print(f"Arms at home pose. Shared frame: {REFERENCE_CAMERA}. Measurements: RENDERED images, colour detection + depth map.")
-    else:
-        print(f"Arms at home pose. Shared frame: {REFERENCE_CAMERA}. Measurements: simulated, {pixel_sigma} px / {depth_sigma * 1000:.1f} mm noise.")
+    print(f"Arms at home pose. Shared frame: {REFERENCE_CAMERA}. Noise: {pixel_sigma} px, {depth_sigma * 1000:.1f} mm depth.")
     print(f"Image {IMAGE_SIZE[0]}x{IMAGE_SIZE[1]}, focal length {cams.intrinsics[REFERENCE_CAMERA].focal_px:.0f} px")
 
     # --- 1-3: collect measurements and solve ---------------------------------

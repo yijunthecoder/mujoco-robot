@@ -3,7 +3,6 @@
 
 Usage:
     python scripts/camera_calibration.py
-    python scripts/camera_calibration.py --render      # real rendered images + block detection
     python scripts/camera_calibration.py --view        # also open the MuJoCo viewer
     python scripts/camera_calibration.py --pixel-noise 1.0 --depth-noise 0.005
     python scripts/camera_calibration.py --pixel-noise 0 --depth-noise 0   # noise-free sanity check
@@ -28,9 +27,8 @@ def main() -> None:
     parser.add_argument("--pixel-noise", type=float, default=0.5, help="detector noise, pixels (default: 0.5)")
     parser.add_argument("--depth-noise", type=float, default=0.002, help="depth noise, metres (default: 0.002)")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--render", action="store_true", help="measure from real rendered images instead of simulated measurements")
     parser.add_argument("--view", action="store_true", help="open the MuJoCo viewer after calibrating")
-    parser.add_argument("--gl", default="egl", help="preferred rendering backend for --render/--view (default: egl)")
+    parser.add_argument("--gl", default="egl", help="preferred rendering backend for --view (default: egl)")
     args = parser.parse_args()
 
     run_calibration(
@@ -42,7 +40,6 @@ def main() -> None:
         seed=args.seed,
         view=args.view,
         prefer_gl=args.gl,
-        render=args.render,
     )
 
 
