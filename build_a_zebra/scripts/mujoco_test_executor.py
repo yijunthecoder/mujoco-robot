@@ -50,9 +50,9 @@ RIGHT_GRIPPER_ACTUATORS = ["right_gripper_joint1_act", "right_gripper_joint2_act
 HOME      = [ 0.0,   0.0,   0.0,   0.0,   0.0,   0.0]
 
 # Left arm: reaches toward +Y side
-L_ABOVE   = [ 0.4,   1.0,  -1.1,   0.0,   0.0,   0.0]
-L_TABLE   = [ 0.4,   1.2,  -1.5,   0.0,   0.0,   0.0]
-L_LIFT    = [ 0.4,   0.6,  -1.0,   0.0,   0.0,   0.0]
+L_ABOVE   = [ 0.4,   1.2,  -1.5,   0.0,   0.0,   0.0]   # HIGH  (approach from above)
+L_TABLE   = [ 0.4,   1.0,  -1.1,   0.0,   0.0,   0.0]   # LOW   (fingertips reach block)
+L_LIFT    = [ 0.4,   1.2,  -1.5,   0.0,   0.0,   0.0]   # HIGH  (retract same way)
 
 # Right arm: reaches toward -Y side
 R_ABOVE   = [-0.4,   1.0,  -1.1,   0.0,   0.0,   0.0]
@@ -110,6 +110,20 @@ class MujocoExecutor(Node):
         while time.time() < end:
             time.sleep(0.01)
 
+        # --- DIAGNOSTIC: where did the gripper end up? ---
+        # Prints the world position of the gripper body after each move.
+        # Use these numbers to set the brick positions in scene.xml so
+        # the fingers actually meet the brick.
+        for name in ("left_linkgripper", "right_linkgripper",
+                     "left_griperlj_link1", "left_griperlj_link2",
+                     "right_griperlj_link1", "right_griperlj_link2"):
+            bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid >= 0:
+                p = self.data.xpos[bid]
+                self.get_logger().info(
+                    f"  [{name}] at ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f})")
+        # --- end diagnostic ---
+
     # ------------------------------------------------------------------
     # Reality check: how many contacts between gripper and any brick?
     # ------------------------------------------------------------------
@@ -163,7 +177,7 @@ class MujocoExecutor(Node):
 
                 # Close fingers, let contacts settle
                 self._drive(self.arm_ids_l, self.gripper_ids_l,
-                            L_TABLE, GRIP_CLOSED, seconds=0.8)
+                            L_TABLE, GRIP_CLOSED, seconds=3.0)
 
                 # Reality check
                 n = self._grip_contact_count()

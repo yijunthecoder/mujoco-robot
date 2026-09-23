@@ -53,10 +53,10 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY
-  stationlite_mujoco
-  DESTINATION share/${PROJECT_NAME}
-)
+# install(DIRECTORY
+#   stationlite_mujoco
+# DESTINATION share/${PROJECT_NAME}
+# )
 
 # Make the tree XML and BOM json available at runtime via the install share
 # dir, so main.cpp can find them with ament_index_cpp::get_package_share_directory.
@@ -79,10 +79,26 @@ if(BUILD_TESTING)
     test/task_model_test.cpp
     src/task_model.cpp
   )
+  
+  ament_add_gtest(recovery_manager_test
+    test/recovery_manager_test.cpp
+    src/recovery_manager.cpp
+  )
+ 
+  ament_add_gtest(world_model_test
+    test/world_model_test.cpp
+    src/world_model.cpp
+  )
+  
+  ament_target_dependencies(world_model_test
+    rclcpp
+    std_msgs
+    geometry_msgs
+  )
+
 endif()
 
 install(PROGRAMS
-  scripts/mock_executor.py
   scripts/mujoco_test_executor.py
   DESTINATION lib/${PROJECT_NAME}
 )
