@@ -1,0 +1,150 @@
+<mujoco model="stationlite">
+  <compiler angle="radian"/>
+  <option timestep="0.0005"/>
+
+  <asset>
+    <mesh name="base" content_type="model/stl" file="meshes/base.STL"/>
+    <mesh name="armbase" content_type="model/stl" file="meshes/armbase.STL"/>
+    <mesh name="link1" content_type="model/stl" file="meshes/link1.STL"/>
+    <mesh name="link2" content_type="model/stl" file="meshes/link2.STL"/>
+    <mesh name="link3" content_type="model/stl" file="meshes/link3.STL"/>
+    <mesh name="link4" content_type="model/stl" file="meshes/link4.STL"/>
+    <mesh name="link5" content_type="model/stl" file="meshes/link5.STL"/>
+    <mesh name="gripper_base" content_type="model/stl" file="meshes/gripper_base.STL"/>
+    <mesh name="griperlj_link1" content_type="model/stl" file="meshes/griperlj_link1.STL"/>
+    <mesh name="griperlj_link2" content_type="model/stl" file="meshes/griperlj_link2.STL"/>
+    <mesh name="handcam" content_type="model/stl" file="meshes/handcam.STL"/>
+    <mesh name="headcam" content_type="model/stl" file="meshes/headcam.STL"/>
+    <mesh name="refcam" content_type="model/stl" file="meshes/refcam.STL"/>
+  </asset>
+
+  <worldbody>
+    <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="base"/>
+    <geom pos="0 0.3175 0" quat="1 0 0 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="armbase"/>
+    <geom pos="0 -0.3175 0" quat="1 0 0 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="armbase"/>
+    <geom pos="0.02402 0 0.78133" quat="0.854912 0 0.518773 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="headcam"/>
+    <geom pos="0.03987 0 0.9764" quat="0.793353 0 0.608761 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="refcam"/>
+    <body name="left_link1" pos="0 0.3175 0">
+      <inertial pos="0.02 -0.002 0.109" quat="0.707107 0 0 0.707107" mass="0.496" diaginertia="0.000356 0.000349 0.000267"/>
+      <joint name="left_joint1" range="-2.824 2.824" actuatorfrcrange="-27 27"/>
+      <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link1"/>
+      <body name="left_link2" pos="0.024 0 0.117">
+        <inertial pos="-0.19164 -0.001145 -5.7e-05" quat="0 0.707107 0 0.707107" mass="0.774" diaginertia="0.006701 0.006613 0.00037"/>
+        <joint name="left_joint2" range="-0.209 3.508" actuatorfrcrange="-27 27" axis="0 1 0"/>
+        <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link2"/>
+        <body name="left_link3" pos="-0.265 0 0">
+          <inertial pos="0.17632 -0.001549 0.054649" quat="0.469159 0.529046 0.529046 0.469159" mass="0.67366" diaginertia="0.007196 0.00718706 0.000396939"/>
+          <joint name="left_joint3" range="-3.193 0" actuatorfrcrange="-27 27" axis="0 1 0"/>
+          <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link3"/>
+          <body name="left_link4" pos="0.265 0 0.062">
+            <inertial pos="0.064717 0 0.047271" quat="0 0.911023 0 0.412355" mass="0.45575" diaginertia="0.000729073 0.000662 0.000232927"/>
+            <joint name="left_joint4" range="-1.71 1.71" actuatorfrcrange="-7 7" axis="0 1 0"/>
+            <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link4"/>
+            <body name="left_link5" pos="0.078 0 -0.00295">
+              <inertial pos="0.002443 0 0.002098" quat="0.997736 -0.00108153 -0.0672417 -0.000624511" mass="0.37166" diaginertia="0.000176542 0.00017 0.000146458"/>
+              <joint name="left_joint5" range="-1.71 1.71" actuatorfrcrange="-12.5 12.5"/>
+              <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link5"/>
+              <body name="left_linkgripper" pos="0.0255 0 0">
+                <inertial pos="0.0427322 2.78304e-05 0.00670353" quat="0.996543 0.00233146 -0.083041 0.0003172" mass="0.530919" diaginertia="0.000603181 0.000573514 0.000441421"/>
+                <joint name="left_joint6" range="-2.856 2.856" actuatorfrcrange="-12.5 12.5" axis="1 0 0"/>
+                <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="gripper_base"/>
+                <geom pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="handcam"/>
+                <body name="left_griperlj_link1" pos="0.1733 0 0">
+                  <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
+                  <joint name="left_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1"/>
+                </body>
+                <body name="left_griperlj_link2" pos="0.1733 0 0">
+                  <inertial pos="-0.074793 0.014951 -3.8e-05" quat="0.569153 0.568309 0.420086 0.420259" mass="0.05" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
+                  <joint name="left_gripper_joint2" type="slide" range="0 0.0425" actuatorfrcrange="-150 150" axis="0 1 0"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="right_link1" pos="0 -0.3175 0">
+      <inertial pos="0.02 -0.002 0.109" quat="0.707107 0 0 0.707107" mass="0.496" diaginertia="0.000356 0.000349 0.000267"/>
+      <joint name="right_joint1" range="-2.824 2.824" actuatorfrcrange="-27 27"/>
+      <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link1"/>
+      <body name="right_link2" pos="0.024 0 0.117">
+        <inertial pos="-0.19164 -0.001145 -5.7e-05" quat="0 0.707107 0 0.707107" mass="0.774" diaginertia="0.006701 0.006613 0.00037"/>
+        <joint name="right_joint2" range="-0.209 3.508" actuatorfrcrange="-27 27" axis="0 1 0"/>
+        <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link2"/>
+        <body name="right_link3" pos="-0.265 0 0">
+          <inertial pos="0.17632 -0.001549 0.054649" quat="0.469159 0.529046 0.529046 0.469159" mass="0.67366" diaginertia="0.007196 0.00718706 0.000396939"/>
+          <joint name="right_joint3" range="-3.193 0" actuatorfrcrange="-27 27" axis="0 1 0"/>
+          <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link3"/>
+          <body name="right_link4" pos="0.265 0 0.062">
+            <inertial pos="0.064717 0 0.047271" quat="0 0.911023 0 0.412355" mass="0.45575" diaginertia="0.000729073 0.000662 0.000232927"/>
+            <joint name="right_joint4" range="-1.71 1.71" actuatorfrcrange="-7 7" axis="0 1 0"/>
+            <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link4"/>
+            <body name="right_link5" pos="0.078 0 -0.00295">
+              <inertial pos="0.002443 0 0.002098" quat="0.997736 -0.00108153 -0.0672417 -0.000624511" mass="0.37166" diaginertia="0.000176542 0.00017 0.000146458"/>
+              <joint name="right_joint5" range="-1.71 1.71" actuatorfrcrange="-12.5 12.5"/>
+              <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="link5"/>
+              <body name="right_linkgripper" pos="0.0255 0 0">
+                <inertial pos="0.0427322 2.78304e-05 0.00670353" quat="0.996543 0.00233146 -0.083041 0.0003172" mass="0.530919" diaginertia="0.000603181 0.000573514 0.000441421"/>
+                <joint name="right_joint6" range="-2.856 2.856" actuatorfrcrange="-12.5 12.5" axis="1 0 0"/>
+                <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="gripper_base"/>
+                <geom pos="0.037112 0 0.100137" quat="0.984808 0 0.173648 0" type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="handcam"/>
+                <body name="right_griperlj_link1" pos="0.1733 0 0">
+                  <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
+                  <joint name="right_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1"/>
+                </body>
+                <body name="right_griperlj_link2" pos="0.1733 0 0">
+                  <inertial pos="-0.074793 0.014951 -3.8e-05" quat="0.569153 0.568309 0.420086 0.420259" mass="0.05" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
+                  <joint name="right_gripper_joint2" type="slide" range="0 0.0425" actuatorfrcrange="-150 150" axis="0 1 0"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <worldbody>
+    <light diffuse=".6 .6 .6" pos="0 0 3" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <body name="zebra_legs" pos="0.40 0.00 0.35">
+      <freejoint/>
+      <geom name="zebra_legs_geom" type="box" size="0.03 0.03 0.03"
+            rgba="0.95 0.95 0.95 1" mass="0.05"/>
+    </body>
+    <body name="zebra_body" pos="0.40 0.08 0.35">
+      <freejoint/>
+      <geom name="zebra_body_geom" type="box" size="0.03 0.03 0.03"
+            rgba="0.85 0.85 0.95 1" mass="0.05"/>
+    </body>
+    <body name="zebra_head" pos="0.40 -0.08 0.35">
+      <freejoint/>
+      <geom name="zebra_head_geom" type="box" size="0.03 0.03 0.03"
+            rgba="0.95 0.85 0.85 1" mass="0.05"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="left_joint1_act" joint="left_joint1" kp="80" kv="8"/>
+    <position name="left_joint2_act" joint="left_joint2" kp="80" kv="8"/>
+    <position name="left_joint3_act" joint="left_joint3" kp="80" kv="8"/>
+    <position name="left_joint4_act" joint="left_joint4" kp="40" kv="4"/>
+    <position name="left_joint5_act" joint="left_joint5" kp="40" kv="4"/>
+    <position name="left_joint6_act" joint="left_joint6" kp="120" kv="20"/>
+    <position name="left_gripper_joint1_act" joint="left_gripper_joint1" kp="300" kv="20"/>
+    <position name="left_gripper_joint2_act" joint="left_gripper_joint2" kp="300" kv="20"/>
+    <position name="right_joint1_act" joint="right_joint1" kp="80" kv="8"/>
+    <position name="right_joint2_act" joint="right_joint2" kp="80" kv="8"/>
+    <position name="right_joint3_act" joint="right_joint3" kp="80" kv="8"/>
+    <position name="right_joint4_act" joint="right_joint4" kp="40" kv="4"/>
+    <position name="right_joint5_act" joint="right_joint5" kp="40" kv="4"/>
+    <position name="right_joint6_act" joint="right_joint6" kp="120" kv="20"/>
+    <position name="right_gripper_joint1_act" joint="right_gripper_joint1" kp="300" kv="20"/>
+    <position name="right_gripper_joint2_act" joint="right_gripper_joint2" kp="300" kv="20"/>
+  </actuator>
+</mujoco>

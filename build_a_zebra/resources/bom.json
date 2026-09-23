@@ -1,0 +1,28 @@
+{
+  "set_number": "31111",
+  "set_name": "DUPLO My First Animal Bricks",
+  "role_order": ["legs", "body", "head"],
+  "build_target": "zebra",
+
+  "catalog": [
+    {"part_id": "31111p02", "animal": "giraffe",   "role": "legs", "description": "Duplo Brick 2x4x2 with Giraffe Legs Pattern"},
+    {"part_id": "31111p03", "animal": "giraffe",   "role": "body", "description": "Duplo Brick 2x4x2 with Giraffe Body Pattern"},
+    {"part_id": "31111p04", "animal": "giraffe",   "role": "head", "description": "Duplo Brick 2x4x2 with Giraffe Head Pattern"},
+
+    {"part_id": "31111p05", "animal": "tiger",     "role": "legs", "description": "Duplo Brick 2x4x2 with Tiger Legs Pattern"},
+    {"part_id": "31111p06", "animal": "tiger",     "role": "body", "description": "Duplo Brick 2x4x2 with Tiger Body Pattern"},
+    {"part_id": "31111p07", "animal": "tiger",     "role": "head", "description": "Duplo Brick 2x4x2 with Tiger Head Pattern"},
+
+    {"part_id": "31111p08", "animal": "crocodile", "role": "legs", "description": "Duplo Brick 2x4x2 with Crocodile Legs Pattern"},
+    {"part_id": "31111p09", "animal": "crocodile", "role": "body", "description": "Duplo Brick 2x4x2 with Crocodile Body Pattern"},
+    {"part_id": "31111p0a", "animal": "crocodile", "role": "head", "description": "Duplo Brick 2x4x2 with Crocodile Head Pattern"},
+
+    {"part_id": "31111p0b", "animal": "flamingo",  "role": "legs", "description": "Duplo Brick 2x4x2 with Flamingo Legs Pattern"},
+    {"part_id": "31111p0c", "animal": "flamingo",  "role": "body", "description": "Duplo Brick 2x4x2 with Flamingo Body Pattern"},
+    {"part_id": "31111p0d", "animal": "flamingo",  "role": "head", "description": "Duplo Brick 2x4x2 with Flamingo Head Pattern"},
+
+    {"part_id": "31111p0e", "animal": "zebra",     "role": "legs", "description": "Duplo Brick 2x4x2 with Zebra Legs Pattern"},
+    {"part_id": "31111p0f", "animal": "zebra",     "role": "body", "description": "Duplo Brick 2x4x2 with Zebra Body Pattern"},
+    {"part_id": "31111p0g", "animal": "zebra",     "role": "head", "description": "Duplo Brick 2x4x2 with Zebra Head Pattern"}
+  ]
+}
