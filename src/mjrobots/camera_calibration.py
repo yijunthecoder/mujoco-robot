@@ -17,7 +17,8 @@ no block position is visible to all four cameras at once. That is fine:
 camera is tied to it separately using block positions that *both* can see.
 
 Method:
-  1. Move a reference object (the orange ``block_right``) around the table.
+  1. Move a reference object (the zebra ``zebra_legs`` brick, Victor's "feet"
+     part) around the table.
   2. At each position, every camera that can see it measures its 3D position in
      the camera's own frame (pixel of the block's centre + depth -> back-project).
   3. For each camera other than headcam, take the positions both it and headcam
@@ -146,7 +147,7 @@ class SimulatedCameras:
         self,
         model: mujoco.MjModel,
         data: mujoco.MjData,
-        block_body: str = "block_right",
+        block_body: str = "zebra_legs",
         pixel_sigma: float = 0.5,
         depth_sigma: float = 0.002,
         rng: np.random.Generator | None = None,
@@ -206,12 +207,14 @@ class SimulatedCameras:
 
 
 def _setup_home_pose(model: mujoco.MjModel, data: mujoco.MjData) -> None:
-    """Arms at their original home pose; the spare block parked out of the way."""
+    """Arms at their original home pose; the other two zebra pieces parked out of the way."""
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
-    # block_left would otherwise sit in the scene and get in the cameras' way.
-    # Nothing is simulated here (no mj_step), so tucking it under the table is safe.
-    body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "block_left")
-    data.qpos[model.jnt_qposadr[model.body_jntadr[body]] + 2] = -0.6
+    # zebra_body/zebra_head would otherwise sit in the scene and get in the
+    # cameras' way while we calibrate/track zebra_legs. Nothing is simulated
+    # here (no mj_step), so tucking them under the table is safe.
+    for other in ("zebra_body", "zebra_head"):
+        body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, other)
+        data.qpos[model.jnt_qposadr[model.body_jntadr[body]] + 2] = -0.6
     mujoco.mj_forward(model, data)
 
 

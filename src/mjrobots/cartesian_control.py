@@ -111,6 +111,124 @@ def solve_ik(
     return q
 
 
+def solve_ik_pose(
+    model,
+    data,
+    body_id: int,
+    local_offset: np.ndarray,
+    joint_ids: np.ndarray,
+    target_pos: np.ndarray,
+    target_quat: np.ndarray,
+    iters: int = 400,
+    damping: float = 0.1,
+    tol: float = 1e-4,
+    max_step: float = 0.15,
+) -> np.ndarray:
+    """Damped-least-squares IK for a point AND orientation, both attached to
+    body_id - unlike `solve_ik`, which only constrains position.
+
+    Needed specifically for grasping: `solve_ik`'s spare degrees of freedom
+    (3 position constraints, 6 joints) let the wrist land in whatever
+    orientation the solver happens to converge to, which is fine for merely
+    moving the hand somewhere but not for reliably closing the gripper
+    around an object - the approach angle matters. This arm's reachable
+    orientation is narrow and rotates with the arm's own swing (confirmed:
+    a top-down or clean-side target orientation fails to converge at all at
+    the grasp's table position - every joint pins to its limit; the SAME
+    orientation that grips well at the grasp point also fails completely at
+    a distant swing angle like the place point). Use this only where the
+    approach angle actually matters (the grasp itself), not throughout a
+    whole transport move.
+    """
+    qpos_adr = model.jnt_qposadr[joint_ids]
+    dof_adr = model.jnt_dofadr[joint_ids]
+    lo = model.jnt_range[joint_ids, 0]
+    hi = model.jnt_range[joint_ids, 1]
+
+    q = data.qpos[qpos_adr].copy()
+    jacp = np.zeros((3, model.nv))
+    jacr = np.zeros((3, model.nv))
+    for _ in range(iters):
+        data.qpos[qpos_adr] = q
+        mujoco.mj_kinematics(model, data)
+        point, jacp = _hand_point_and_jac(model, data, body_id, local_offset)
+        pos_err = target_pos - point
+
+        cur_quat = data.xquat[body_id]
+        neg_cur = np.empty(4)
+        mujoco.mju_negQuat(neg_cur, cur_quat)
+        err_quat = np.empty(4)
+        mujoco.mju_mulQuat(err_quat, target_quat, neg_cur)
+        rot_err = np.empty(3)
+        mujoco.mju_quat2Vel(rot_err, err_quat, 1.0)
+
+        err = np.concatenate([pos_err, rot_err])
+        if np.linalg.norm(err) < tol:
+            break
+
+        mujoco.mj_jac(model, data, jacp, jacr, point, body_id)
+        J = np.vstack([jacp[:, dof_adr], jacr[:, dof_adr]])
+        dq = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(6), err)
+        dq = np.clip(dq, -max_step, max_step)
+        q = np.clip(q + dq, lo, hi)
+
+    return q
+
+
+def move_to_pose(
+    model,
+    data,
+    render,
+    clock,
+    arm_ctrl_slice: slice,
+    body_id: int,
+    local_offset: np.ndarray,
+    joint_ids: np.ndarray,
+    target_pos: np.ndarray,
+    target_quat: np.ndarray,
+    steps: int = 600,
+    waypoints: int = 30,
+    settle_steps: int = 150,
+    carry=None,
+) -> None:
+    """Like `move_to_point`, but also holds the gripper at `target_quat`
+    throughout - see `solve_ik_pose`. The orientation target is held fixed
+    across all waypoints (only position is interpolated); this is meant for
+    short, single-purpose moves like the final grasp approach, not a long
+    transport where forcing one fixed orientation the whole way may not
+    even be reachable.
+    """
+    mujoco.mj_kinematics(model, data)
+    start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
+
+    steps_per_wp = max(1, steps // waypoints)
+    q = data.qpos[model.jnt_qposadr[joint_ids]].copy()
+    for i in range(1, waypoints + 1):
+        alpha = i / waypoints
+        wp_target = start_point + alpha * (target_pos - start_point)
+        q = solve_ik_pose(model, data, body_id, local_offset, joint_ids, wp_target, target_quat)
+
+        ctrl_start = data.ctrl[arm_ctrl_slice].copy()
+        for s in range(steps_per_wp):
+            a = (s + 1) / steps_per_wp
+            data.ctrl[arm_ctrl_slice] = ctrl_start + a * (q - ctrl_start)
+            mujoco.mj_step(model, data)
+            if carry is not None:
+                carry()
+            if render is not None:
+                clock.tick()
+                render.step()
+
+    data.ctrl[arm_ctrl_slice] = q
+    for _ in range(settle_steps):
+        mujoco.mj_step(model, data)
+        if carry is not None:
+            carry()
+        if render is not None:
+            clock.tick()
+            render.step()
+
+
 def move_to_point(
     model,
     data,
@@ -124,6 +242,7 @@ def move_to_point(
     steps: int = 600,
     waypoints: int = 30,
     settle_steps: int = 150,
+    carry=None,
 ) -> None:
     """Smoothly drive the hand point to `target_pos`.
 
@@ -138,6 +257,11 @@ def move_to_point(
     The PD servos lag a fast-moving ctrl target, so a few cm of tracking
     error remains right after the last waypoint; `settle_steps` holds ctrl
     at the final solution so the arm actually catches up before returning.
+
+    `carry`, if given, is called after every `mj_step` - same convention as
+    stationlite_pick_place.py's `_move_to`/`_make_carry`: a no-argument
+    callback that snaps a held object's freejoint to the gripper each step,
+    since this arm can't hold anything through contact/friction alone.
     """
     mujoco.mj_kinematics(model, data)
     start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
@@ -154,6 +278,8 @@ def move_to_point(
             a = (s + 1) / steps_per_wp
             data.ctrl[arm_ctrl_slice] = ctrl_start + a * (q - ctrl_start)
             mujoco.mj_step(model, data)
+            if carry is not None:
+                carry()
             if render is not None:
                 clock.tick()
                 render.step()
@@ -161,6 +287,8 @@ def move_to_point(
     data.ctrl[arm_ctrl_slice] = q
     for _ in range(settle_steps):
         mujoco.mj_step(model, data)
+        if carry is not None:
+            carry()
         if render is not None:
             clock.tick()
             render.step()

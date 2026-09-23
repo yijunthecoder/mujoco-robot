@@ -1,11 +1,11 @@
-"""Bridge: publish this project's calibrated block position to Victor's
+"""Bridge: publish this project's calibrated zebra-brick position to Victor's
 zebra_bt Behavior Tree over ROS2.
 
-Victor's `WorldModel` (build_a_zebra/include/zebra_bt/world_model.hpp and
-world_model.cpp, on the origin/Victor branch) subscribes to a topic expecting
-one comma-separated line per update:
+Victor's `WorldModel` (build_a_zebra/src/world_model.cpp, checked out locally
+under Downloads/mujoco-project/mujoco-project/build_a_zebra) subscribes to a
+topic expecting one comma-separated line per update:
 
-    part_id,STATUS,x,y,z          (x,y,z only present when STATUS=LOCATED)
+    part,STATUS,x,y,z          (x,y,z only present when STATUS=LOCATED)
 
 STATUS is one of LOCATED, LOST, PICKED, PICK_FAILED, PLACED, ESCALATED - this
 publisher only ever sends LOCATED (it has a position) or LOST (no camera can
@@ -15,13 +15,12 @@ by perception.
 This file mirrors that format by hand - it is not generated from his code,
 so if his `perceptionCallback` format changes, this needs updating to match.
 
-PROVISIONAL PART-ID MAPPING: the real zebra DUPLO bricks (part IDs
-31111p0e/f/g, see build_a_zebra/resources/bom.json on his branch) are not in
-this project's MuJoCo scene yet. Until they are, this publishes the existing
-`block_right` test block's calibrated position under ONE of his real part
-IDs (default: 31111p0e, "legs" - first in his build order), purely to prove
-the ROS2 wiring end-to-end before the real geometry exists. Swap in the real
-per-part positions later without changing anything else here.
+PART NAMING: WorldModel's constructor hardcodes exactly three part keys -
+"head", "body", "feet" (see the `for (const auto & name : {"head", "body",
+"feet"})` loop in world_model.cpp) - NOT the numeric LDraw/BOM part IDs
+(31111p0e/f/g) used elsewhere in this project. Sending anything else (e.g.
+the numeric ID) makes his WorldModel log "Unknown part" and silently drop
+the update. This project's `zebra_legs` body corresponds to his "feet".
 
 Requires ROS2 (this project was set up against Humble) sourced in the shell
 before running: `source /opt/ros/humble/setup.bash`.
@@ -48,7 +47,7 @@ from .camera_calibration import (
 )
 
 PERCEPTION_TOPIC = "/zebra/perception_updates"
-DEFAULT_PART_ID = "31111p0e"  # zebra legs - first in his build order
+DEFAULT_PART_ID = "feet"  # our zebra_legs body == his WorldModel's "feet" part
 
 
 class ZebraPerceptionPublisher(Node):
