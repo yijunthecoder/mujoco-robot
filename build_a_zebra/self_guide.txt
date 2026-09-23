@@ -1,0 +1,286 @@
+MUJUCO-PROJECT/
+├── scene.xml                       # The physical world (MuJoCo)
+└── build_a_zebra/                  # The brain workspace (ROS 2 Package)
+    ├── package.xml                 # The dependencies checklist
+    ├── CMakeLists.txt              # The compilation blueprints
+    ├── trees/
+    │   └── zebra_tree.xml          # The high-level behavior logic
+    ├── include/zebra_bt/
+    │   └── world_model.hpp         # The World/Task State definitions
+    └── src/
+        ├── world_model.cpp         # The state processor
+        └── main.cpp                # The master ignition engine
+
+[scene.xml] ──(Simulates Physics)──> [ROS 2 Topics] ──> [world_model.cpp] (Saves State)
+                                                                 │
+[zebra_tree.xml] <──(Decides Actions via Blackboard) <───────────┘
+       │
+       └──> [main.cpp] ──(Sends Trajectories)──> [mujoco_ros2_control] ──> [scene.xml Move!]
+
+
+scene.xml - It acts as the actual physical sandbox. It defines the tables, the red ball,
+            the joints of the arm, and the friction settings of the fingers.
+
+world_model.hpp & world_model.cpp - This is your World State and Task State database.
+                                    world_model continuously listens to the ROS 2
+                                    captures the coordinates, stores them safely in C++ variables
+
+trees/zebra_tree.xml - This contains your execution logic divided by your robot’s anatomy (Head, Body, Feet).
+
+main.cpp - This is the ignition switch that boots up the entire ROS 2 C++ node.
+
+package.xml & CMakeLists.txt - They do not run during the simulation; instead, they are active during colcon build.
+                                package.xml guarantees that the BehaviorTree software engines are installed in your workspace
+                                CMakeLists.txt tells the computer compiler how to stitch main.cpp and world_model.cpp
+                                together into a single automated program executable.
+
+
+
+
+
+
+
+
+
+
+
+
+------ General ------------------------------------------------------------
+
+#pragma once      : Only include this file once during compilation
+#include <memory> : Smart pointers like std::shared_ptr or std::unique_ptr.
+#include <random> : Engines and die-rollers like std::mt19937 and std::uniform_int_distribution.
+#include <vector> : The std::vector dynamic list container.
+
+DisturbanceGenerator::DisturbanceGenerator  (const std::string & config_path)
+  [  Class Name  ]  :: [ Constructor Name ] ( [         Parameters        ] )
+
+nlohmann/json is the JSON library.
+    |____ To Read bom.json && disturbances.json
+
+ifstream = input file stream
+nlohmann::json j = creates an empty, smart JSON object container named j
+file >> j = Input raw text inside your open file stream and pours it directly into j. 
+            Library automatically parses the text, maps out the keys and values,
+            and turns it into a structured object that C++ can easily understand.
+
+--------------------------------------------------------------------------------
+
+bom.json                = which parts and order to build
+package.xml             = package identity/dependencies
+CMakeLists.txt          = build instructions
+main.cpp                = manager / coordinator
+zebra_tree.xml          = the robot’s checklist
+TaskModel               = the recipe for building a Zebra
+WorldModel              = the robot’s memory
+DisturbanceGenerator    = random things going wrong
+RecoveryManager         = what to do after an error
+SkillBridge             = messenger to the robot simulator
+mock_executor.py        = temporary fake robot
+
+
+------ CMakeLists ------------------------------------------------------------
+
+What this project is called
+What libraries it needs
+Which C++ files to compile
+What executable to create
+Which extra files to install
+
+CMake is the program that creates compiler instructions.
+Without CMake, the computer would not know:
+which `.cpp` files belong together,
+which libraries are needed,
+what executable name to make.
+
+C++17 is a language standard enables modern C++ features:
+    - std::make_shared
+    - std::make_unique
+    - structured modern C++ syntax
+
+These do not normally stop compilation. They make the compiler tell you about suspicious code. (add_compile_options)
+    - Wall       Enable common warnings.
+    - Wextra     Enable additional useful warnings.
+    - Wpedantic  Warn when code is not fully standard C++.
+        |__ unused variables
+        |__ missing return statements
+        |__ unsafe conversions
+        |__ possible programming mistakes
+
+find_package(ament_cmake REQUIRED)         # ament_cmake is ROS 2’s CMake build system. (“If this package is missing, stop the build with an error.”)
+find_package(rclcpp REQUIRED)              # rclcpp: ROS 2 C++ tools.
+find_package(std_msgs REQUIRED)            # std_msgs: basic ROS messages such as String.
+find_package(geometry_msgs REQUIRED)       # geometry_msgs: ROS geometry types, such as a 3D Point.
+find_package(ament_index_cpp REQUIRED)     # ament_index_cpp: lets your code locate installed resource files.
+find_package(behaviortree_cpp REQUIRED)    # behaviortree_cpp: the Behavior Tree library.
+
+ros2 run build_a_zebra zebra_bt_node (Run executable zebra_bt_node from ROS package build_a_zebra.)
+    - build_a_zebra = ROS package name
+    - zebra_bt_node = executable name
+
+src/main.cpp                            # Starts ROS, creates objects, runs the BT loop.
+src/world_model.cpp                     # Stores live part state and perception updates.
+src/task_model.cpp                      # Reads the Zebra BOM/recipe.
+src/recovery_manager.cpp                # Decides retry, relocate, or escalate.
+src/disturbance_generator.cpp           # Creates simulated loss/noise/relocation events.
+
+ament_target_dependencies(...) says:
+“This specific executable, zebra_bt_node,
+needs these ROS packages when compiling and linking.”
+
+target_link_libraries(...) says:
+“zebra_bt_node uses BehaviorTree.CPP code,
+so include that library in the final program.”
+
+1. Colcon finds package.xml.
+2. Colcon sees that the package uses ament_cmake.
+3. CMake reads CMakeLists.txt.
+4. CMake finds ROS and BehaviorTree.CPP dependencies.
+5. CMake compiles all five .cpp files.
+6. CMake links them into zebra_bt_node.
+7. CMake installs zebra_bt_node.
+8. CMake copies trees/ and resources/ into install/.
+9. ROS can now locate and run the package.
+
+
+------ Package ------------------------------------------------------------
+
+What this package is called
+Who maintains it
+What libraries it needs
+How ROS should build it
+What testing tools it uses
+
+build_a_zebra = package name
+zebra_bt_node = executable inside the package
+
+XML is a markup format, like HTML, but used here for structured package information.
+A schema is like a rulebook. It describes valid package XML tags.
+For example, ROS expects tags such as:
+<name>
+<version>
+<depend>
+<license>
+
+ament_lint_auto
+This automatically finds relevant ROS code-quality checks.
+
+ament_lint_common
+This provides common linters.
+
+Linters checks:
+    formatting
+    copyright headers
+    common style mistakes
+    some suspicious code patterns
+
+In the FUTURE?
+1. Add a LICENSE file because you selected MIT.
+2. Update the description to say Legs / Body / Head.
+3. Update the JSON comment because main.cpp now also uses JSON.
+4. Add actual test files later if your team wants automated testing.
+
+------ bom/disturbance ------------------------------------------------------------
+
+BOM
+  -  Which animal to build
+  -  Which physical part IDs belong to it
+  -  What order to assemble them
+
+DISTURBANCE
+  -  part disappears
+  -  part is bumped
+  -  sensor position changes
+
+MuJoCo/perception says a part is LOST
+→ publish /zebra/perception_updates
+
+MuJoCo pick action fails
+→ publish FAILED /zebra/skill_status
+
+------ task_model.hpp ------------------------------------------------------------
+
+
+std::string   = text, such as "zebra" or "31111p0e"
+std::vector   = a list, such as a list of parts
+stdexcept     = error types, used when JSON/file loading fails
+
+namespace (folder in c++)
+A struct is a simple data container.
+
+taskmodel CMakeLists
+|__ Static task information = recipe information that should not constantly change.
+    |__ What animal are we building?
+    |__ Which pieces belong to it?
+    |__ What order should the pieces be assembled?
+
+explicit TaskModel(const std::string & bom_file_path);
+|__ This creates a TaskModel by reading a BOM JSON file.
+|__ explicit prevents accidental conversions.
+|__ This class should only be created deliberately with a BOM file path.
+
+const std::string & bom_file_path
+|__ Accept text containing the BOM file path.
+|__ Do not change that text.
+|__ Do not make an unnecessary copy of it.
+
+fullcatalog()
+|__ List of the entire available parts
+
+buildTarget()
+|__ What animal
+
+buildOrder()
+|__ What order does it build (Leg > Body > Head)
+
+dependencyOf()
+|__ What part must be placed before this part
+
+PartSpec
+= one DUPLO part description.
+
+catalog_
+= every available DUPLO part in the JSON.
+
+build_target_
+= selected animal, currently Zebra.
+
+role_order_
+= legs → body → head.
+
+build_order_
+= only the selected Zebra parts, sorted correctly.
+
+TaskModel
+= reads the BOM and turns raw JSON into useful C++ task data.
+
+------ disturbance_generator.h/cpp ------------------------------------------------------------
+
+hpp --> blueprints
+cpp --> Actual Construction
+
+explicit DisturbanceGenerator(const std::string & config_path);
+                              VS
+DisturbanceGenerator::DisturbanceGenerator(const std::string & config_path) 
+{
+    std::ifstream file(config_path); 
+    nlohmann::json json_data;
+    file >> json_data;    
+}
+
+random_device{} = 
+ifstream file(config_path) = open file
+
+auto = Look at data type inside the JSON list, figure out what it is, 
+       and make (Variable name) match that data type automatically 
+       so I don't have to type out a long, complex library type name."
+
+check_interval_ticks_ = j.value("check_interval_ticks", 4);
+ [Variable Name]      = Key Value inside Json file (Default if value isnt called)
+
+events_.push_back(event) = Take a copy of the fully loaded clipboard (event) we just filled out for this
+                           page, and push it into the back of our permanent filing cabinet (events_).
+
+Vector<string> = Create a list of text strings
+shared_ptr (Shared Pointer) is a "smart" memory manager.
+wm = WorldModel
