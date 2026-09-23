@@ -269,6 +269,20 @@ def _collect_test_positions(cams: SimulatedCameras, n: int, rng: np.random.Gener
     return np.array(positions), observations
 
 
+def _observe_live_position(cams: SimulatedCameras) -> dict:
+    """Cameras' view of the block wherever it *currently* is - unlike
+    `_collect_test_positions`, this never calls `place_block`, so it doesn't
+    teleport the block. `_collect_test_positions` exists to synthesize fresh
+    ground-truth positions for testing calibration accuracy; this exists for
+    the opposite case, tracking a block that a live simulation (physics, or
+    an arm carrying it) is actually moving on its own.
+
+    Returns {camera: measurement}, only cameras that can currently see it.
+    """
+    seen = {name: cams.observe(name) for name in CAMERAS}
+    return {name: p for name, p in seen.items() if p is not None}
+
+
 def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray, aligned_world: list[dict]) -> None:
     """Open the MuJoCo viewer and step the block through the held-out positions.
 

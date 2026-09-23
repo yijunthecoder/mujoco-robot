@@ -2,8 +2,8 @@
 zebra_bt Behavior Tree over ROS2.
 
 Victor's `WorldModel` (build_a_zebra/src/world_model.cpp, checked out locally
-under Downloads/mujoco-project/mujoco-project/build_a_zebra) subscribes to a
-topic expecting one comma-separated line per update:
+at ~/ros2_ws/src/build_a_zebra) subscribes to a topic expecting one
+comma-separated line per update:
 
     part,STATUS,x,y,z          (x,y,z only present when STATUS=LOCATED)
 
@@ -15,12 +15,14 @@ by perception.
 This file mirrors that format by hand - it is not generated from his code,
 so if his `perceptionCallback` format changes, this needs updating to match.
 
-PART NAMING: WorldModel's constructor hardcodes exactly three part keys -
-"head", "body", "feet" (see the `for (const auto & name : {"head", "body",
-"feet"})` loop in world_model.cpp) - NOT the numeric LDraw/BOM part IDs
-(31111p0e/f/g) used elsewhere in this project. Sending anything else (e.g.
-the numeric ID) makes his WorldModel log "Unknown part" and silently drop
-the update. This project's `zebra_legs` body corresponds to his "feet".
+PART NAMING: WorldModel is keyed by whatever part_ids main.cpp passes in from
+TaskModel::buildOrder(), which reads them straight from bom.json - the real
+LDraw part ids (31111p0e/f/g), not "head"/"body"/"feet" (checked directly
+against the current world_model.cpp/main.cpp/bom.json - an earlier version
+of this comment claimed a hardcoded {"head","body","feet"} loop in the
+constructor that no longer exists in his code; sending "feet" made every
+update get logged as "Unknown part" and silently dropped). This project's
+`zebra_legs` body is his zebra-legs part, "31111p0e".
 
 Requires ROS2 (this project was set up against Humble) sourced in the shell
 before running: `source /opt/ros/humble/setup.bash`.
@@ -41,13 +43,13 @@ from .camera_calibration import (
     SimulatedCameras,
     _DEFAULT_SCENE,
     _collect_calibration_pairs,
-    _collect_test_positions,
+    _observe_live_position,
     _setup_home_pose,
     calibrate,
 )
 
 PERCEPTION_TOPIC = "/zebra/perception_updates"
-DEFAULT_PART_ID = "feet"  # our zebra_legs body == his WorldModel's "feet" part
+DEFAULT_PART_ID = "31111p0e"  # our zebra_legs body == his zebra-legs part id (bom.json)
 
 
 class ZebraPerceptionPublisher(Node):
@@ -77,6 +79,10 @@ class ZebraPerceptionPublisher(Node):
         self.get_logger().info(f"Calibrating from {n_calib} block positions per camera...")
         pairs = _collect_calibration_pairs(self.cams, n_calib, self.rng)
         self.transforms = calibrate(pairs)
+        # _collect_calibration_pairs moves the block through random test
+        # positions (via place_block) and leaves it at the last one - restore
+        # its real position before we start reporting it as "live".
+        _setup_home_pose(model, data)
         self.get_logger().info(
             f"Calibrated. Publishing '{part_id}' on {PERCEPTION_TOPIC} every {interval}s."
         )
@@ -84,8 +90,7 @@ class ZebraPerceptionPublisher(Node):
         self.create_timer(interval, self._tick)
 
     def _tick(self) -> None:
-        _, observations = _collect_test_positions(self.cams, 1, self.rng)
-        seen = observations[0]
+        seen = _observe_live_position(self.cams)
         available = [name for name in CAMERAS if name in seen]
 
         if not available:

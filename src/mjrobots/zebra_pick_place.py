@@ -39,6 +39,95 @@ _TABLE_PLACE_XYZ = np.array([0.4148, 0.0, -0.1216])  # target_site, table height
 _HOVER_DZ = 0.10  # scanned reachable across the whole grasp/place workspace
 
 
+class ZebraArmContext:
+    """Everything `grasp_part`/`place_part` need for one arm + one brick, set
+    up once so repeated pick/place calls (e.g. from a ROS2 command bridge)
+    don't redo the grip-orientation probe each time."""
+
+    def __init__(self, model, data, arm: str, brick_body_name: str = "zebra_legs"):
+        self.model = model
+        self.data = data
+        self.arm = arm
+        self.joint_ids = np.array(
+            [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in ARM_JOINTS[arm]]
+        )
+        self.body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{arm}_linkgripper")
+        ctrl_offset = 0 if arm == "left" else 8
+        self.arm_ctrl = slice(ctrl_offset, ctrl_offset + 6)
+        self.brick_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, brick_body_name)
+        self.this_arm = _Arm(ctrl_offset=ctrl_offset, block_id=self.brick_id)
+        self.carry = _make_carry(model, data, self.brick_id, f"{arm}_griperlj_link1", f"{arm}_griperlj_link2")
+
+        # See grasp_part()'s docstring for why this fixed orientation (not
+        # position-only IK) is used for the grasp approach specifically.
+        qpos_adr = model.jnt_qposadr[self.joint_ids]
+        saved_qpos = data.qpos.copy()
+        data.qpos[qpos_adr] = [0.0, 2.23, -1.215, 0.0, 0.0, 0.0]
+        mujoco.mj_kinematics(model, data)
+        self.grip_quat = data.xquat[self.body_id].copy()
+        data.qpos[:] = saved_qpos
+        mujoco.mj_forward(model, data)
+
+    def go(self, render, clock, target, carry_fn=None):
+        move_to_point(
+            self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
+            HAND_LOCAL_OFFSET, self.joint_ids, target, carry=carry_fn,
+        )
+
+    def go_oriented(self, render, clock, target, carry_fn=None):
+        move_to_pose(
+            self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
+            HAND_LOCAL_OFFSET, self.joint_ids, target, self.grip_quat, carry=carry_fn,
+        )
+
+
+def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
+    """Approach, descend onto, and grip the brick at `center_xyz` (its
+    geometric center, not its body origin - see `_BRICK_CENTER_OFFSET_Z`),
+    then lift it clear of the table.
+
+    Uses `move_to_pose` (fixed grip orientation - `ctx.grip_quat`, found once
+    at a known-good pose) for the approach/descend/lift, not position-only
+    `move_to_point`: position-only IK leaves the wrist wherever it happens to
+    converge, fine for transport but not for reliably closing the gripper
+    around something. Forcing this same orientation over a *long* reach
+    doesn't work either (tested: every joint pins to its limit, ~1m position
+    error, since the reachable orientation rotates with the arm's own swing
+    angle) - it's used only for this short grasp-approach range.
+    """
+    hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
+    ctx.go_oriented(render, clock, hover_xyz)
+    ctx.go_oriented(render, clock, center_xyz)
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
+    ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
+
+
+def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
+    """Carry the already-grasped brick to `center_xyz` (geometric center)
+    and release it there via anchor, not a raw handoff to physics - see
+    stationlite_pick_place.py's module docstring for why the anchor step
+    (pinning to an exact coordinate while the gripper opens) matters for
+    placement accuracy over this gripper's friction-only grip.
+    """
+    hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
+    ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
+    ctx.go(render, clock, center_xyz, carry_fn=ctx.carry)
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 100, carry=ctx.carry)
+
+    # _make_anchor pins the body's ORIGIN (qpos), not its geometric center -
+    # and this brick's origin sits 1.7cm above its center (see
+    # _BRICK_CENTER_OFFSET_Z). Anchoring at center_xyz directly would wedge
+    # the brick 1.7cm into the table - confirmed by testing: it held fine
+    # during the anchor (which forces the position every step regardless of
+    # penetration) then popped back out the moment the anchor released and
+    # real contact physics took over. Anchor target must be the
+    # origin-equivalent instead.
+    anchor_origin_target = center_xyz - np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+    anchor = _make_anchor(ctx.model, ctx.data, ctx.brick_id, anchor_origin_target)
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300, carry=anchor)
+    ctx.go(render, clock, hover_xyz)
+
+
 def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "right") -> None:
     """Move `zebra_legs` from its spawn spot to the table's middle point."""
     from .gl import configure_gl
@@ -52,83 +141,20 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
     mujoco.mj_forward(model, data)
 
-    joint_ids = np.array([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in ARM_JOINTS[arm]])
-    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{arm}_linkgripper")
-    ctrl_offset = 0 if arm == "left" else 8
-    arm_ctrl = slice(ctrl_offset, ctrl_offset + 6)
-    grip_ctrl = slice(ctrl_offset + 6, ctrl_offset + 8)
-
-    brick_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "zebra_legs")
-    this_arm = _Arm(ctrl_offset=ctrl_offset, block_id=brick_id)
-    brick_center_z = data.xpos[brick_id][2] + _BRICK_CENTER_OFFSET_Z
-    grasp_xyz = np.array([data.xpos[brick_id][0], data.xpos[brick_id][1], brick_center_z])
-    hover_grasp_xyz = grasp_xyz + np.array([0, 0, _HOVER_DZ])
+    ctx = ZebraArmContext(model, data, arm)
+    brick_center_z = data.xpos[ctx.brick_id][2] + _BRICK_CENTER_OFFSET_Z
+    grasp_xyz = np.array([data.xpos[ctx.brick_id][0], data.xpos[ctx.brick_id][1], brick_center_z])
     place_xyz = np.array([_TABLE_PLACE_XYZ[0], _TABLE_PLACE_XYZ[1], brick_center_z])
-    hover_place_xyz = place_xyz + np.array([0, 0, _HOVER_DZ])
-
-    # The grip orientation used at the ORIGINAL stationlite_pick_place.py
-    # demo's own grasp waypoint (j1=0, j2=2.23, j3=-1.215, wrist joints 0) -
-    # the only orientation confirmed, by direct testing, to both converge
-    # cleanly AND actually grip well at a nearby table position. Position-
-    # only IK (move_to_point, used for the rest of this sequence) leaves the
-    # wrist wherever it happens to converge, which is fine for transport but
-    # not for reliably closing the gripper - and forcing this SAME
-    # orientation across the whole reach to the middle of the table doesn't
-    # work either (tested: every joint pins to its limit, ~1m position
-    # error) since the reachable orientation rotates with the arm's own
-    # swing angle. So it's used only for the grasp approach itself.
-    qpos_adr = model.jnt_qposadr[joint_ids]
-    saved_qpos = data.qpos.copy()
-    data.qpos[qpos_adr] = [0.0, 2.23, -1.215, 0.0, 0.0, 0.0]
-    mujoco.mj_kinematics(model, data)
-    grip_quat = data.xquat[body_id].copy()
-    data.qpos[:] = saved_qpos
-    mujoco.mj_forward(model, data)
-
-    carry = _make_carry(model, data, brick_id, f"{arm}_griperlj_link1", f"{arm}_griperlj_link2")
 
     clock = _RealtimeClock(dt=model.opt.timestep)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         render = _ThrottledSync(viewer, model)
 
-        def go(target, carry_fn=None):
-            move_to_point(model, data, render, clock, arm_ctrl, body_id, HAND_LOCAL_OFFSET, joint_ids, target, carry=carry_fn)
+        grasp_part(ctx, render, clock, grasp_xyz)
+        place_part(ctx, render, clock, place_xyz)
 
-        def go_oriented(target, carry_fn=None):
-            move_to_pose(
-                model, data, render, clock, arm_ctrl, body_id, HAND_LOCAL_OFFSET, joint_ids,
-                target, grip_quat, carry=carry_fn,
-            )
-
-        # Approach and descend at the PROVEN grip orientation (not
-        # position-only IK - see grip_quat's comment above), close, lift.
-        go_oriented(hover_grasp_xyz)
-        go_oriented(grasp_xyz)
-        _hold(model, data, render, clock, this_arm, _GRIP_CLOSED, 150)
-        go(hover_grasp_xyz, carry_fn=carry)
-
-        # Carry to the middle, descend, release via anchor (not a raw
-        # handoff to physics - see stationlite_pick_place.py's docstring for
-        # why the anchor step matters for placement accuracy).
-        go(hover_place_xyz, carry_fn=carry)
-        go(place_xyz, carry_fn=carry)
-        _hold(model, data, render, clock, this_arm, _GRIP_CLOSED, 100, carry=carry)
-
-        # _make_anchor pins the body's ORIGIN (qpos), not its geometric
-        # center - and this brick's origin sits 1.7cm above its center (see
-        # _BRICK_CENTER_OFFSET_Z). Anchoring at place_xyz (a center-height
-        # coordinate) directly would wedge the brick 1.7cm into the table -
-        # confirmed by testing: it held fine during the anchor (which forces
-        # the position every step regardless of penetration) then popped
-        # back out the moment the anchor released and real contact physics
-        # took over. Anchor target must be the origin-equivalent instead.
-        anchor_origin_target = place_xyz - np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
-        anchor = _make_anchor(model, data, brick_id, anchor_origin_target)
-        _hold(model, data, render, clock, this_arm, _GRIP_OPEN, 300, carry=anchor)
-        go(hover_place_xyz)
-
-        final = data.xpos[brick_id].copy()
+        final = data.xpos[ctx.brick_id].copy()
         err = np.linalg.norm(final[:2] - place_xyz[:2])
         print(f"[mjrobots] zebra_legs placed at {final}, {err * 100:.2f} cm lateral error from target")
         print("[mjrobots] done - close the window to exit")
