@@ -2,8 +2,8 @@
 """CLI: calibrate the stationlite scene's 4 cameras against one reference block.
 
 Usage:
-    python scripts/camera_calibration.py
-    python scripts/camera_calibration.py --view        # also open the MuJoCo viewer
+    python scripts/camera_calibration.py                # prints each position's coordinates
+    python scripts/camera_calibration.py --view          # also open the MuJoCo viewer
     python scripts/camera_calibration.py --pixel-noise 1.0 --depth-noise 0.005
     python scripts/camera_calibration.py --pixel-noise 0 --depth-noise 0   # noise-free sanity check
 """

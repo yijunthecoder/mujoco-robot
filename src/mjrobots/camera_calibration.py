@@ -265,16 +265,6 @@ def _collect_test_positions(cams: SimulatedCameras, n: int, rng: np.random.Gener
     return np.array(positions), observations
 
 
-def _rotation_error_deg(a: np.ndarray, b: np.ndarray) -> float:
-    cos = (np.trace(a.T @ b) - 1) / 2
-    return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
-
-
-def _max_pairwise_mm(points: np.ndarray) -> float:
-    diffs = points[:, None, :] - points[None, :, :]
-    return float(np.linalg.norm(diffs, axis=-1).max() * 1000)
-
-
 def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray, aligned_world: list[dict]) -> None:
     """Open the MuJoCo viewer and step the block through the held-out positions.
 
@@ -337,58 +327,27 @@ def run_calibration(
     rng = np.random.default_rng(seed)
     cams = SimulatedCameras(model, data, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=rng)
 
-    print(f"Arms at home pose. Shared frame: {REFERENCE_CAMERA}. Noise: {pixel_sigma} px, {depth_sigma * 1000:.1f} mm depth.")
-    print(f"Image {IMAGE_SIZE[0]}x{IMAGE_SIZE[1]}, focal length {cams.intrinsics[REFERENCE_CAMERA].focal_px:.0f} px")
-
     # --- 1-3: collect measurements and solve ---------------------------------
     pairs = _collect_calibration_pairs(cams, n_calib, rng)
     transforms = calibrate(pairs)
-
-    # --- grade the solved transforms against MuJoCo's true camera poses ------
     ref_true = cams.cam_pose(REFERENCE_CAMERA)
-    print(f"\nCalibration from {n_calib} block positions per camera - error vs MuJoCo's true camera poses:")
-    print(f"  {'camera':<15}{'rotation err':>14}{'translation err':>18}{'fit residual':>15}")
-    print(f"  {REFERENCE_CAMERA:<15}{'(shared frame)':>47}")
-    for name, (own, in_ref) in pairs.items():
-        cam_true = cams.cam_pose(name)
-        # true camera -> reference-camera transform
-        true_R = ref_true.R.T @ cam_true.R
-        true_t = ref_true.R.T @ (cam_true.t - ref_true.t)
-        est = transforms[name]
-        rot_err = _rotation_error_deg(est.R, true_R)
-        trans_err = np.linalg.norm(est.t - true_t) * 1000
-        resid = np.sqrt(np.mean(np.sum((est.apply(own) - in_ref) ** 2, axis=1))) * 1000
-        print(f"  {name:<15}{rot_err:>11.3f} deg{trans_err:>15.2f} mm{resid:>12.2f} mm")
 
     # --- 4: check on block positions not used for fitting --------------------
     test_world, test_obs = _collect_test_positions(cams, n_test, rng)
     aligned = [{name: transforms[name].apply(p) for name, p in obs.items()} for obs in test_obs]
-    # Truth expressed in the shared frame, for grading only.
-    truth = (test_world - ref_true.t) @ ref_true.R
+    truth = (test_world - ref_true.t) @ ref_true.R  # truth expressed in the shared frame
 
-    print(f"\nHeld-out block positions ({n_test}, not used in the fit). Only cameras that can see the block count:")
-    print(f"  {'#':<3}{'seen by':<40}{'disagree, raw':>15}{'aligned':>10}{'mean err vs truth':>20}")
-    aligned_spread = []
+    # --- main output: the calibrated coordinates -------------------------
+    print(f"Block position, in metres, in the shared frame ({REFERENCE_CAMERA}):\n")
     for k in range(n_test):
-        names = list(aligned[k])
-        raw = _max_pairwise_mm(np.array([test_obs[k][n] for n in names]))
-        pts = np.array([aligned[k][n] for n in names])
-        spread = _max_pairwise_mm(pts)
-        err = np.linalg.norm(pts.mean(axis=0) - truth[k]) * 1000
-        aligned_spread.append(spread)
-        print(f"  {k + 1:<3}{', '.join(names):<40}{raw:>12.1f} mm{spread:>7.2f} mm{err:>17.2f} mm")
-    print(f"  worst / mean aligned disagreement: {max(aligned_spread):.2f} / {np.mean(aligned_spread):.2f} mm")
-
-    print("\nPosition 1 as each camera reports it (metres):")
-    print(f"  {'camera':<15}{'own frame (raw)':>32}{'shared frame (aligned)':>34}")
-    for name in CAMERAS:
-        if name in aligned[0]:
-            raw = np.array2string(test_obs[0][name], precision=3, suppress_small=True)
-            al = np.array2string(aligned[0][name], precision=3, suppress_small=True)
-        else:
-            raw, al = "-", "cannot see block"
-        print(f"  {name:<15}{raw:>32}{al:>34}")
-    print(f"  {'truth':<15}{'':>32}{np.array2string(truth[0], precision=3, suppress_small=True):>34}")
+        print(f"Position {k + 1} - truth {np.array2string(truth[k], precision=3, suppress_small=True)}")
+        for name in CAMERAS:
+            if name in aligned[k]:
+                al = np.array2string(aligned[k][name], precision=3, suppress_small=True)
+            else:
+                al = "cannot see block here"
+            print(f"  {name:<15}{al}")
+        print()
 
     if view:
         # Aligned estimates live in the headcam frame; the viewer draws in world coordinates.

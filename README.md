@@ -34,22 +34,6 @@ cd /mnt/c/intern/mujoco-robots
 pip install -r requirements.txt
 ```
 
-## Usage
-
-```bash
-python scripts/view.py --list                       # list available menagerie models
-python scripts/view.py franka_emika_panda            # view a robot (prefers EGL, falls back to software)
-python scripts/view.py franka_emika_panda --gl osmesa # try a different backend
-MUJOCO_GL=glfw python scripts/view.py franka_emika_panda  # force a specific backend, bypassing fallback logic
-```
-
-Or from Python:
-
-```python
-from mjrobots import view
-view("franka_emika_panda")
-```
-
 ## Pick-and-place demo
 
 ```bash
@@ -89,17 +73,25 @@ snapped to the fingertip midpoint each step until release — the mesh-only
 finger geometry isn't reliable enough to hold an object through arm motion
 on its own (confirmed experimentally).
 
-## Rendering fallback
+## Cartesian control (point-to-point IK)
 
-`configure_gl()` (in `src/mjrobots/gl.py`) tries your preferred backend
-(default `egl`) by actually creating a tiny offscreen renderer. If that
-fails, it sets `LIBGL_ALWAYS_SOFTWARE=1` so both offscreen rendering and the
-interactive viewer window fall back to Mesa's software rasterizer — the same
-fix you were applying by hand, just automatic now.
+`src/mjrobots/cartesian_control.py` solves runtime IK for either stationlite
+arm — given any target XYZ point, it drives the gripper's fingertip midpoint
+there directly, instead of the hardcoded waypoints above.
 
-Note: `MUJOCO_GL` only affects *offscreen* contexts (`mujoco.Renderer`). The
-interactive viewer window always uses GLFW and reads `LIBGL_ALWAYS_SOFTWARE`
-directly, which is why the fallback sets both.
+```bash
+python scripts/cartesian_control.py --target 0.45 0.1 -0.05
+python scripts/cartesian_control.py --arm right --target 0.4 -0.2 -0.1
+```
+
+It interpolates a straight line of Cartesian waypoints from the hand's
+current position to the target and re-solves damped-least-squares IK at
+each one (warm-started from the arm's own current pose), then ramps
+`data.ctrl` through each solution while stepping physics — so the hand's
+own path stays close to a straight line, not just the joints'. A red sphere
+marks the target in the viewer; it prints the final position error on
+arrival (typically under 1cm).
+
 
 ## Menagerie location
 
@@ -113,7 +105,3 @@ directly, which is why the fallback sets both.
 It isn't copied into this project (it's ~2.4GB) — set `MENAGERIE_ROOT` to
 point elsewhere if you move or re-clone it.
 
-## Adding a new robot
-
-Nothing to change — any menagerie folder with a `scene.xml` is picked up
-automatically by `--list` and `view()`.

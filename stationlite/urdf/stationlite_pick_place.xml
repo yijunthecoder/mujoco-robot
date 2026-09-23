@@ -33,6 +33,13 @@
     <material name="block_right_mat" rgba="0.85 0.55 0.1 1"/>
     <material name="block_left_mat" rgba="0.15 0.45 0.85 1"/>
     <material name="target_mat" rgba="0.1 0.8 0.1 0.35"/>
+
+    <!-- Zebra DUPLO bricks exported from LDraw (31111p0e/f/g). The STLs are in
+         centimetres, so scale 0.01 converts to MuJoCo's metres. All three are
+         the same physical brick; only the (visual) print polygons differ. -->
+    <mesh name="zebra_body" file="../meshes/zebra_body.stl" scale="0.01 0.01 0.01"/>
+    <mesh name="zebra_legs" file="../meshes/zebra_legs.stl" scale="0.01 0.01 0.01"/>
+    <mesh name="zebra_head" file="../meshes/zebra_head.stl" scale="0.01 0.01 0.01"/>
   </asset>
 
   <worldbody>
