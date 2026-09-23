@@ -17,13 +17,15 @@ mujoco-robots/
 │   └── viewer.py     # load()/view() helpers
 │   └── pick_place.py  # damped-least-squares IK + scripted pick-and-place motion
 │   └── stationlite_pick_place.py  # two-arm block-stacking demo (stationlite robot)
-│   └── camera_calibration.py      # aligns the 4 stationlite cameras into one shared frame
+│   ├── camera_calibration.py      # aligns the 4 stationlite cameras into one shared frame
+│   └── zebra_publisher.py         # publishes calibrated positions to Victor's zebra_bt over ROS2
 ├── scripts/
 │   ├── view.py                    # CLI entry point (menagerie robots by name)
 │   ├── view_file.py                # CLI entry point (any .urdf/.xml by path)
 │   ├── pick_place.py                # CLI entry point for the Panda pick-and-place demo
 │   ├── stationlite_pick_place.py     # CLI entry point for the stationlite stacking demo
-│   └── camera_calibration.py         # CLI entry point for the 4-camera calibration
+│   ├── camera_calibration.py         # CLI entry point for the 4-camera calibration
+│   └── zebra_publisher.py            # CLI entry point for the ROS2 bridge to zebra_bt
 └── requirements.txt
 ```
 

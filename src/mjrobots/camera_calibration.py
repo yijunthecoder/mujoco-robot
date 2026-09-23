@@ -40,6 +40,7 @@ down its own -z axis.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -273,8 +274,6 @@ def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray,
     block. (Don't enable the viewer's camera-marker overlay: looking through a
     camera from inside its own marker fills the whole view with green.)
     """
-    import time
-
     import mujoco.viewer
 
     colours = {
@@ -309,6 +308,17 @@ def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray,
             time.sleep(0.02)
 
 
+def _print_position(label: int | str, truth: np.ndarray, aligned: dict[str, np.ndarray]) -> None:
+    print(f"Position {label} - truth {np.array2string(truth, precision=3, suppress_small=True)}")
+    for name in CAMERAS:
+        if name in aligned:
+            al = np.array2string(aligned[name], precision=3, suppress_small=True)
+        else:
+            al = "cannot see block here"
+        print(f"  {name:<15}{al}")
+    print()
+
+
 def run_calibration(
     scene_path: str | None = None,
     n_calib: int = 15,
@@ -318,6 +328,8 @@ def run_calibration(
     seed: int = 0,
     view: bool = False,
     prefer_gl: str = "egl",
+    loop: bool = False,
+    interval: float = 1.0,
 ) -> None:
     if view:
         configure_gl(prefer_gl)  # must happen before the viewer is created
@@ -332,22 +344,37 @@ def run_calibration(
     transforms = calibrate(pairs)
     ref_true = cams.cam_pose(REFERENCE_CAMERA)
 
+    print(f"Block position, in metres, in the shared frame ({REFERENCE_CAMERA}):\n")
+
+    if loop:
+        # --- keep reporting fresh positions until stopped ---------------------
+        # Stands in for "the block is moving in a live simulation": each tick
+        # samples a new visible position instead of replaying a fixed batch.
+        # A real publisher (step 4) ticks this same loop and sends each
+        # position over the network instead of just printing it - so the
+        # interval matters for real use: Victor's WorldModel marks a part
+        # stale after 2s with no update, so this needs to run faster than that.
+        print(f"Looping every {interval}s - press Ctrl+C to stop.\n")
+        k = 0
+        try:
+            while True:
+                k += 1
+                world, obs = _collect_test_positions(cams, 1, rng)
+                one_aligned = {name: transforms[name].apply(p) for name, p in obs[0].items()}
+                one_truth = (world[0] - ref_true.t) @ ref_true.R
+                _print_position(k, one_truth, one_aligned)
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("Stopped.")
+        return
+
     # --- 4: check on block positions not used for fitting --------------------
     test_world, test_obs = _collect_test_positions(cams, n_test, rng)
     aligned = [{name: transforms[name].apply(p) for name, p in obs.items()} for obs in test_obs]
     truth = (test_world - ref_true.t) @ ref_true.R  # truth expressed in the shared frame
 
-    # --- main output: the calibrated coordinates -------------------------
-    print(f"Block position, in metres, in the shared frame ({REFERENCE_CAMERA}):\n")
     for k in range(n_test):
-        print(f"Position {k + 1} - truth {np.array2string(truth[k], precision=3, suppress_small=True)}")
-        for name in CAMERAS:
-            if name in aligned[k]:
-                al = np.array2string(aligned[k][name], precision=3, suppress_small=True)
-            else:
-                al = "cannot see block here"
-            print(f"  {name:<15}{al}")
-        print()
+        _print_position(k + 1, truth[k], aligned[k])
 
     if view:
         # Aligned estimates live in the headcam frame; the viewer draws in world coordinates.
