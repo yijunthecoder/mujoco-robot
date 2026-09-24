@@ -34,6 +34,14 @@ goal):
    the geometric center that `grasp_part`/`place_part` expect (see
    `_BRICK_CENTER_OFFSET_Z`) - applied in world frame, after (1).
 
+Perception note: this process also publishes perception
+(`/zebra/perception_updates`), from its OWN live simulation - a
+`ZebraPerceptionPublisher` embedded on this same model/data. A separate
+zebra_publisher.py process would load its own copy of the scene, where
+nothing ever moves, and keep reporting the brick's spawn position forever.
+Publishing is driven from every physics step (`_PerceivingSync`), not a ROS2
+timer, so it keeps going during a blocking grasp/place too.
+
 Threading note: the ROS2 subscription callback only enqueues commands
 (`ZebraSkillBridge.pending`); the actual physics/IK work runs on the main
 thread inside the viewer loop via non-blocking `spin_once` each idle tick -
@@ -56,9 +64,11 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from .pick_place import _RealtimeClock, _ThrottledSync
+from .zebra_publisher import ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
     _DEFAULT_SCENE,
+    _TABLE_PLACE_XYZ,
     ZebraArmContext,
     grasp_part,
     place_part,
@@ -102,6 +112,20 @@ class ZebraSkillBridge(Node):
         self.get_logger().info(f"-> {status} {command_id}")
 
 
+class _PerceivingSync:
+    """`_ThrottledSync` that also gives perception a chance to publish on
+    every physics step - grasp_part/place_part call `render.step()` each
+    step, so this keeps perception going through a whole blocking move."""
+
+    def __init__(self, render: _ThrottledSync, perception: ZebraPerceptionPublisher) -> None:
+        self._render = render
+        self._perception = perception
+
+    def step(self) -> None:
+        self._render.step()
+        self._perception.maybe_publish()
+
+
 def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "right") -> None:
     from .gl import configure_gl
 
@@ -116,6 +140,18 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
     ctx = ZebraArmContext(model, data, arm)
     clock = _RealtimeClock(dt=model.opt.timestep)
 
+    # Victor's PlacePart currently sends the part's own last-seen position as
+    # the place target (main.cpp: `send("place", part_, state.position)`), so
+    # honoring it just puts the brick back where it was picked from. Until his
+    # tree sends a real assembly position, every place goes to the middle
+    # circle (target_site) instead, at the same resting height the brick
+    # spawns at on the table - same target as zebra_pick_place.run_demo.
+    place_center_xyz = np.array([
+        _TABLE_PLACE_XYZ[0],
+        _TABLE_PLACE_XYZ[1],
+        data.xpos[ctx.brick_id][2] + _BRICK_CENTER_OFFSET_Z,
+    ])
+
     # headcam's own pose, to invert perception's "shared frame (headcam)"
     # coordinates back into MuJoCo world coordinates - see module docstring.
     headcam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "headcam")
@@ -124,16 +160,20 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
 
     rclpy.init()
     node = ZebraSkillBridge()
+    perception = ZebraPerceptionPublisher(part_id=OUR_PART_ID, model=model, data=data, use_timer=False)
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(perception)
 
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            render = _ThrottledSync(viewer, model)
+            render = _PerceivingSync(_ThrottledSync(viewer, model), perception)
             node.get_logger().info(
                 f"Ready - watching {COMMAND_TOPIC} for part '{OUR_PART_ID}' ({arm} arm)."
             )
 
             while viewer.is_running() and rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.0)
+                executor.spin_once(timeout_sec=0.0)
 
                 try:
                     command = node.pending.get_nowait()
@@ -156,15 +196,23 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
                 try:
                     if skill == "pick":
                         grasp_part(ctx, render, clock, center_xyz)
+                        perception.status_override = "PICKED"
                     elif skill == "place":
-                        place_part(ctx, render, clock, center_xyz)
+                        place_part(ctx, render, clock, place_center_xyz)  # ignores command target - see above
+                        perception.status_override = "PLACED"
                     else:
                         raise ValueError(f"unknown skill '{skill}'")
+                    # Publish the new status BEFORE replying, so no stale
+                    # LOCATED can land after his tree has set PICKED/PLACED.
+                    perception.maybe_publish(force=True)
                     node.report(command_id, "SUCCEEDED")
                 except Exception as exc:  # report failure to the BT rather than crashing the bridge
                     node.get_logger().error(f"{skill} {command_id} failed: {exc}")
+                    if skill == "pick":
+                        perception.status_override = None
                     node.report(command_id, "FAILED", str(exc))
     finally:
+        perception.destroy_node()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

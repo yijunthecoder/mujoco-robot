@@ -8,9 +8,10 @@ comma-separated line per update:
     part,STATUS,x,y,z          (x,y,z only present when STATUS=LOCATED)
 
 STATUS is one of LOCATED, LOST, PICKED, PICK_FAILED, PLACED, ESCALATED - this
-publisher only ever sends LOCATED (it has a position) or LOST (no camera can
-currently see it); the other statuses are set by his own Behavior Tree, not
-by perception.
+publisher sends LOCATED (it has a position) or LOST (no camera can currently
+see it), unless whoever moves the brick sets `status_override` (the skill
+bridge sends PICKED while holding it and PLACED once placed, matching what
+his tree just set - see `ZebraPerceptionPublisher.status_override`).
 
 This file mirrors that format by hand - it is not generated from his code,
 so if his `perceptionCallback` format changes, this needs updating to match.
@@ -29,6 +30,9 @@ before running: `source /opt/ros/humble/setup.bash`.
 """
 
 from __future__ import annotations
+
+import time
+from datetime import datetime
 
 import numpy as np
 import rclpy
@@ -51,9 +55,31 @@ from .camera_calibration import (
 PERCEPTION_TOPIC = "/zebra/perception_updates"
 DEFAULT_PART_ID = "31111p0e"  # our zebra_legs body == his zebra-legs part id (bom.json)
 
+# Display only - what goes over the topic must stay the LDraw id, since
+# Victor's WorldModel looks parts up by it (his own prettyPart() does the same).
+PART_LABELS = {"31111p0e": "legs", "31111p0f": "body", "31111p0g": "head"}
+
 
 class ZebraPerceptionPublisher(Node):
-    """Calibrates once on startup, then republishes the block's position on a timer."""
+    """Calibrates once on startup, then republishes the block's position.
+
+    Two ways to run it:
+
+    - Standalone (`model`/`data` omitted): loads its own copy of the scene and
+      publishes on a ROS2 timer. Nothing moves in that copy, so this only
+      ever reports the brick's spawn position - fine for testing perception
+      on its own, but it can't see an arm move the brick.
+    - Embedded (`model`/`data` given, `use_timer=False`): watches a live
+      simulation someone else is stepping - zebra_skill_bridge.py passes its
+      own, so perception sees the same brick the arm moves. The owner calls
+      `maybe_publish()` from its own loop instead of a timer, since a
+      blocking grasp/place never yields to rclpy.spin (and going quiet for
+      that long trips Victor's 2s perception-staleness timeout).
+
+    Calibration always runs on a scratch MjData: `_collect_calibration_pairs`
+    teleports the brick through random positions (`place_block`), which must
+    never happen to a live simulation.
+    """
 
     def __init__(
         self,
@@ -64,50 +90,93 @@ class ZebraPerceptionPublisher(Node):
         depth_sigma: float = 0.002,
         seed: int = 0,
         scene_path: str | None = None,
+        model: mujoco.MjModel | None = None,
+        data: mujoco.MjData | None = None,
+        use_timer: bool = True,
     ) -> None:
         super().__init__("zebra_perception_publisher")
         self.part_id = part_id
+        self.label = PART_LABELS.get(part_id, part_id)
+        self.interval = interval
         self.publisher = self.create_publisher(String, PERCEPTION_TOPIC, 10)
-
-        model = mujoco.MjModel.from_xml_path(str(scene_path or _DEFAULT_SCENE))
-        data = mujoco.MjData(model)
-        _setup_home_pose(model, data)
         self.rng = np.random.default_rng(seed)
+
+        # What to report instead of LOCATED, set by whoever is moving the
+        # brick (e.g. "PICKED" while held, "PLACED" once assembled). Victor's
+        # perceptionCallback overwrites the part's status on every message,
+        # so a plain LOCATED after a successful place would undo his PLACED
+        # and make the tree pick the part up again.
+        self.status_override: str | None = None
+        self._last_publish = float("-inf")
+
+        if model is None:
+            model = mujoco.MjModel.from_xml_path(str(scene_path or _DEFAULT_SCENE))
+            data = mujoco.MjData(model)
+            _setup_home_pose(model, data)
+
+        # --- calibrate once, on a scratch copy (see class docstring) ---
+        self._log(f"calibrating  ({n_calib} samples per camera)")
+        scratch = mujoco.MjData(model)
+        _setup_home_pose(model, scratch)
+        calib_cams = SimulatedCameras(model, scratch, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=self.rng)
+        self.transforms = calibrate(_collect_calibration_pairs(calib_cams, n_calib, self.rng))
+
         self.cams = SimulatedCameras(model, data, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=self.rng)
+        self._log(f"ready        {self.label} ({part_id}) -> {PERCEPTION_TOPIC} every {interval}s")
 
-        # --- calibrate once, exactly like --loop does before its first tick ---
-        self.get_logger().info(f"Calibrating from {n_calib} block positions per camera...")
-        pairs = _collect_calibration_pairs(self.cams, n_calib, self.rng)
-        self.transforms = calibrate(pairs)
-        # _collect_calibration_pairs moves the block through random test
-        # positions (via place_block) and leaves it at the last one - restore
-        # its real position before we start reporting it as "live".
-        _setup_home_pose(model, data)
-        self.get_logger().info(
-            f"Calibrated. Publishing '{part_id}' on {PERCEPTION_TOPIC} every {interval}s."
-        )
+        if use_timer:
+            self.create_timer(interval, self._tick)
 
-        self.create_timer(interval, self._tick)
+    def maybe_publish(self, force: bool = False) -> None:
+        """Publish if `interval` seconds (wall clock) have passed - cheap
+        enough to call every physics step."""
+        now = time.monotonic()
+        if force or now - self._last_publish >= self.interval:
+            self._tick()
 
     def _tick(self) -> None:
+        self._last_publish = time.monotonic()
         seen = _observe_live_position(self.cams)
         available = [name for name in CAMERAS if name in seen]
+        status = self.status_override or "LOCATED"
 
         if not available:
-            self._publish(f"{self.part_id},LOST")
+            # A held/placed part the cameras can't see (e.g. the gripper is in
+            # the way) is still held/placed - only report LOST otherwise.
+            status = self.status_override or "LOST"
+            self._publish(f"{self.part_id},{status}", f"{self.label}  {status}")
             return
 
         # headcam is the shared frame itself, so prefer it when it can see the
         # block; any other camera that can see it converts to the same answer.
         camera = REFERENCE_CAMERA if REFERENCE_CAMERA in available else available[0]
         x, y, z = self.transforms[camera].apply(seen[camera])
-        self._publish(f"{self.part_id},LOCATED,{x:.4f},{y:.4f},{z:.4f}")
+        self._publish(
+            f"{self.part_id},{status},{x:.4f},{y:.4f},{z:.4f}",
+            f"{self.label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}",
+        )
 
-    def _publish(self, line: str) -> None:
+    def _publish(self, line: str, shown: str) -> None:
         msg = String()
         msg.data = line
         self.publisher.publish(msg)
-        self.get_logger().info(f"-> {line}")
+        self._log(shown)
+
+    @staticmethod
+    def _log(text: str) -> None:
+        print(f"[{datetime.now():%H:%M:%S}] {text}", flush=True)
+
+
+def _other_perception_publisher(node: Node, wait: float = 3.0) -> bool:
+    """True if some other node already publishes PERCEPTION_TOPIC. Polls for
+    `wait` seconds so DDS discovery has time to see it (the count includes
+    this node's own publisher, hence > 1)."""
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if node.count_publishers(PERCEPTION_TOPIC) > 1:
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def run_publisher(
@@ -130,6 +199,16 @@ def run_publisher(
         scene_path=scene_path,
     )
     try:
+        if _other_perception_publisher(node):
+            print(
+                f"Another node is already publishing {PERCEPTION_TOPIC} - most likely "
+                "zebra_skill_bridge.py, which publishes perception from the simulation "
+                "the arm actually moves in. Not starting: this publisher only sees its "
+                "own static copy of the scene, so it would keep reporting the brick at "
+                "its spawn spot, overwrite PLACED, and make zebra_bt pick it again.",
+                flush=True,
+            )
+            raise SystemExit(1)
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         # Ctrl+C raises the former; a SIGTERM (e.g. from `timeout`, or a

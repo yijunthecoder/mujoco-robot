@@ -12,6 +12,11 @@ Usage:
 
 Watch it yourself, without Victor's machine, in a second terminal:
     ros2 topic echo /zebra/perception_updates
+
+Standalone perception only: it simulates its own static copy of the scene,
+so it always reports the brick's spawn position. For a full pick/place run
+use scripts/zebra_skill_bridge.py instead, which publishes perception from
+the simulation the arm actually moves in.
 """
 
 from __future__ import annotations

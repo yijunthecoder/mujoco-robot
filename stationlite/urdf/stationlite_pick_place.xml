@@ -31,9 +31,16 @@
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.0"/>
     <material name="table_mat" rgba="0.55 0.4 0.28 1"/>
     <material name="target_mat" rgba="0.1 0.8 0.1 0.35"/>
-    <material name="zebra_legs_mat" rgba="0.9 0.75 0.1 1"/>
-    <material name="zebra_body_mat" rgba="0.85 0.85 0.85 1"/>
-    <material name="zebra_head_mat" rgba="0.85 0.15 0.15 1"/>
+    <!-- Real print colors, not arbitrary per-part colors: values are the
+         actual LDraw palette entries (LDConfig.ldr) used by the zebra
+         pieces' print pattern - Black (0), White (15/16), Reddish_Brown
+         (70). All three pieces share the same plain white plastic body;
+         what distinguishes legs/body/head is the printed artwork itself
+         (see the per-part *_black/_white/_brown meshes below), same as
+         the real physical parts. -->
+    <material name="print_black" rgba="0.106 0.165 0.204 1"/>
+    <material name="print_white" rgba="0.957 0.957 0.957 1"/>
+    <material name="print_brown" rgba="0.373 0.192 0.035 1"/>
     <!-- alpha=0.001, not 0: mj_ray (camera_calibration.py's line-of-sight
          check) skips a geom only at EXACTLY alpha=0 - confirmed directly
          (isolated test: 0.0 -> never hit; 0.001 -> hit correctly, same as
@@ -43,12 +50,25 @@
          peeking past the mesh's actual (non-box) silhouette. -->
     <material name="collision_hidden" rgba="0 0 0 0.001"/>
 
-    <!-- Zebra DUPLO bricks exported from LDraw (31111p0e/f/g). The STLs are in
-         centimetres, so scale 0.01 converts to MuJoCo's metres. All three are
-         the same physical brick; only the (visual) print polygons differ. -->
-    <mesh name="zebra_body" file="../meshes/zebra_body.stl" scale="0.01 0.01 0.01"/>
-    <mesh name="zebra_legs" file="../meshes/zebra_legs.stl" scale="0.01 0.01 0.01"/>
-    <mesh name="zebra_head" file="../meshes/zebra_head.stl" scale="0.01 0.01 0.01"/>
+    <!-- Zebra DUPLO bricks, converted directly from the LDraw source parts
+         (31111p0e/f/g, not the old flat-color STL export) so the actual
+         printed pattern renders - LDraw encodes a print as differently
+         colored triangles layered on the plain brick body, which a plain
+         STL export throws away (geometry only, no per-face color). Split
+         into one mesh per print color per part since a MuJoCo mesh geom
+         only takes one material; scale 0.01 (STLs in centimetres) matches
+         the old convention exactly - verified against the previous single-
+         color zebra_legs.stl to float32 precision. See
+         ldraw_convert.py notes: LDU (x,y,z) -> STL (x, z, -y) * 0.04. -->
+    <mesh name="zebra_legs_white" file="../meshes/zebra_legs_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_legs_black" file="../meshes/zebra_legs_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_legs_brown" file="../meshes/zebra_legs_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_white" file="../meshes/zebra_body_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_black" file="../meshes/zebra_body_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_brown" file="../meshes/zebra_body_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_white" file="../meshes/zebra_head_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_black" file="../meshes/zebra_head_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_brown" file="../meshes/zebra_head_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
   </asset>
 
   <worldbody>
@@ -149,24 +169,27 @@
       <freejoint/>
       <geom name="zebra_legs_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
-      <geom type="mesh" mesh="zebra_legs"
-        material="zebra_legs_mat" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_legs_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_legs_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_legs_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
     </body>
 
     <body name="zebra_body" pos="0.2 0 -0.0842">
       <freejoint/>
       <geom name="zebra_body_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
-      <geom type="mesh" mesh="zebra_body"
-        material="zebra_body_mat" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_body_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_body_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_body_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
     </body>
 
     <body name="zebra_head" pos="0.2 0.15 -0.0842">
       <freejoint/>
       <geom name="zebra_head_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
-      <geom type="mesh" mesh="zebra_head"
-        material="zebra_head_mat" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_head_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_head_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_head_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
     </body>
 
     <!-- Middle stacking point: (0.4148, 0, table height), reachable by both

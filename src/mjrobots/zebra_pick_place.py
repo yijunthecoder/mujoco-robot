@@ -56,7 +56,7 @@ class ZebraArmContext:
         self.arm_ctrl = slice(ctrl_offset, ctrl_offset + 6)
         self.brick_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, brick_body_name)
         self.this_arm = _Arm(ctrl_offset=ctrl_offset, block_id=self.brick_id)
-        self.carry = _make_carry(model, data, self.brick_id, f"{arm}_griperlj_link1", f"{arm}_griperlj_link2")
+        self.carry = self.new_carry()
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -67,6 +67,16 @@ class ZebraArmContext:
         self.grip_quat = data.xquat[self.body_id].copy()
         data.qpos[:] = saved_qpos
         mujoco.mj_forward(model, data)
+
+    def new_carry(self):
+        """A carry that holds the brick where the fingers closed on it (see
+        `_make_carry`'s keep_grasp_offset) - one per grasp, since the offset
+        is captured on its first call."""
+        return _make_carry(
+            self.model, self.data, self.brick_id,
+            f"{self.arm}_griperlj_link1", f"{self.arm}_griperlj_link2",
+            keep_grasp_offset=True,
+        )
 
     def go(self, render, clock, target, carry_fn=None):
         move_to_point(
@@ -99,6 +109,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     ctx.go_oriented(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, center_xyz)
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
+    ctx.carry = ctx.new_carry()
     ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
 
 

@@ -9,9 +9,10 @@ Usage:
     python scripts/zebra_skill_bridge.py
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
 
-Run alongside (in separate terminals):
-    python scripts/zebra_publisher.py       # reports zebra_legs' position
-    ros2 run build_a_zebra zebra_bt_node     # Victor's tree, drives both
+Also publishes perception (/zebra/perception_updates) from this same
+simulation, so don't run scripts/zebra_publisher.py alongside it - that one
+watches its own static copy of the scene. Run in a second terminal:
+    ros2 run build_a_zebra zebra_bt_node     # Victor's tree
 """
 
 from __future__ import annotations
