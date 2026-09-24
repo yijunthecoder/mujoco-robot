@@ -2,8 +2,10 @@
 """CLI: calibrate the stationlite scene's 4 cameras against one reference block.
 
 Usage:
-    python scripts/camera_calibration.py
-    python scripts/camera_calibration.py --view        # also open the MuJoCo viewer
+    python scripts/camera_calibration.py                # prints each position's coordinates
+    python scripts/camera_calibration.py --loop          # keeps reporting new positions until Ctrl+C
+    python scripts/camera_calibration.py --loop --interval 0.5
+    python scripts/camera_calibration.py --view          # also open the MuJoCo viewer
     python scripts/camera_calibration.py --pixel-noise 1.0 --depth-noise 0.005
     python scripts/camera_calibration.py --pixel-noise 0 --depth-noise 0   # noise-free sanity check
 """
@@ -29,6 +31,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--view", action="store_true", help="open the MuJoCo viewer after calibrating")
     parser.add_argument("--gl", default="egl", help="preferred rendering backend for --view (default: egl)")
+    parser.add_argument("--loop", action="store_true", help="keep reporting new positions until Ctrl+C, instead of a fixed --n-test batch")
+    parser.add_argument("--interval", type=float, default=1.0, help="seconds between positions in --loop mode (default: 1.0)")
     args = parser.parse_args()
 
     run_calibration(
@@ -40,6 +44,8 @@ def main() -> None:
         seed=args.seed,
         view=args.view,
         prefer_gl=args.gl,
+        loop=args.loop,
+        interval=args.interval,
     )
 
 

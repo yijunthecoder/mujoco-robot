@@ -117,7 +117,7 @@ def _hold(model, data, render, clock, arm, grip_target, steps, carry=None) -> No
 _IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
 
 
-def _make_carry(model, data, block_body_id, f1_name, f2_name):
+def _make_carry(model, data, block_body_id, f1_name, f2_name, keep_grasp_offset: bool = False):
     """Snap `block_body_id`'s freejoint to the named fingers' midpoint each step.
 
     Also holds orientation at identity (axis-aligned), not just position:
@@ -127,16 +127,28 @@ def _make_carry(model, data, block_body_id, f1_name, f2_name):
     blocks could each end up rotated tens of degrees in opposite directions,
     which stacks the centers correctly but leaves the faces nowhere near
     flush with each other.
+
+    `keep_grasp_offset=True` holds the body where it was when the carry
+    first ran, relative to the fingers, instead of putting its ORIGIN at the
+    finger midpoint. Needed when the origin isn't at the grip point - e.g.
+    the zebra bricks, whose origin sits ~2cm above their center: snapping
+    the origin to the fingers (aimed at the center) carried them ~2cm too
+    low, visibly sinking into the table while being picked up/set down.
+    Make a fresh carry per grasp so the offset is re-captured each time.
     """
     f1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f1_name)
     f2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f2_name)
     joint_id = model.body_jntadr[block_body_id]
     qpos_adr = model.jnt_qposadr[joint_id]
     dof_adr = model.jnt_dofadr[joint_id]
+    offset = None if keep_grasp_offset else np.zeros(3)
 
     def carry() -> None:
+        nonlocal offset
         mid = (data.xpos[f1_id] + data.xpos[f2_id]) / 2
-        data.qpos[qpos_adr : qpos_adr + 3] = mid
+        if offset is None:
+            offset = data.qpos[qpos_adr : qpos_adr + 3] - mid
+        data.qpos[qpos_adr : qpos_adr + 3] = mid + offset
         data.qpos[qpos_adr + 3 : qpos_adr + 7] = _IDENTITY_QUAT
         data.qvel[dof_adr : dof_adr + 6] = 0.0
         mujoco.mj_forward(model, data)

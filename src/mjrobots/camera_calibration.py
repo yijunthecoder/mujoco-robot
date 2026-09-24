@@ -17,7 +17,8 @@ no block position is visible to all four cameras at once. That is fine:
 camera is tied to it separately using block positions that *both* can see.
 
 Method:
-  1. Move a reference object (the orange ``block_right``) around the table.
+  1. Move a reference object (the zebra ``zebra_legs`` brick, Victor's "feet"
+     part) around the table.
   2. At each position, every camera that can see it measures its 3D position in
      the camera's own frame (pixel of the block's centre + depth -> back-project).
   3. For each camera other than headcam, take the positions both it and headcam
@@ -40,6 +41,7 @@ down its own -z axis.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +58,7 @@ CAMERAS = ("headcam", "refcam", "left_handcam", "right_handcam")
 HAND_CAMERAS = ("left_handcam", "right_handcam")
 REFERENCE_CAMERA = "headcam"  # its frame becomes the shared frame
 IMAGE_SIZE = (640, 480)  # (width, height); the scene XML leaves resolution unset
+_RAY_GROUPS = np.array([1, 1, 0, 1, 1, 1], dtype=np.uint8)  # all geom groups except 2 (visual meshes)
 
 # Where the block may be placed (world frame, metres): across the table, from
 # table height up to a few cm above it.
@@ -145,7 +148,7 @@ class SimulatedCameras:
         self,
         model: mujoco.MjModel,
         data: mujoco.MjData,
-        block_body: str = "block_right",
+        block_body: str = "zebra_legs",
         pixel_sigma: float = 0.5,
         depth_sigma: float = 0.002,
         rng: np.random.Generator | None = None,
@@ -181,7 +184,10 @@ class SimulatedCameras:
         direction = direction / np.linalg.norm(direction)
         hit_geom = np.zeros(1, dtype=np.int32)
         # bodyexclude: don't let the camera's own housing block its view.
-        mujoco.mj_ray(self.model, self.data, origin, direction, None, 1, self.model.cam_bodyid[i], hit_geom)
+        # geomgroup: skip group 2 (the bricks' visual meshes) so only their
+        # solid collision boxes count - the two share faces exactly, and a
+        # ray would otherwise hit whichever one floating-point noise favours.
+        mujoco.mj_ray(self.model, self.data, origin, direction, _RAY_GROUPS, 1, self.model.cam_bodyid[i], hit_geom)
         return hit_geom[0] == self._block_geom
 
     def observe(self, name: str, noisy: bool = True) -> np.ndarray | None:
@@ -205,12 +211,14 @@ class SimulatedCameras:
 
 
 def _setup_home_pose(model: mujoco.MjModel, data: mujoco.MjData) -> None:
-    """Arms at their original home pose; the spare block parked out of the way."""
+    """Arms at their original home pose; the other two zebra pieces parked out of the way."""
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
-    # block_left would otherwise sit in the scene and get in the cameras' way.
-    # Nothing is simulated here (no mj_step), so tucking it under the table is safe.
-    body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "block_left")
-    data.qpos[model.jnt_qposadr[model.body_jntadr[body]] + 2] = -0.6
+    # zebra_body/zebra_head would otherwise sit in the scene and get in the
+    # cameras' way while we calibrate/track zebra_legs. Nothing is simulated
+    # here (no mj_step), so tucking them under the table is safe.
+    for other in ("zebra_body", "zebra_head"):
+        body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, other)
+        data.qpos[model.jnt_qposadr[model.body_jntadr[body]] + 2] = -0.6
     mujoco.mj_forward(model, data)
 
 
@@ -265,14 +273,18 @@ def _collect_test_positions(cams: SimulatedCameras, n: int, rng: np.random.Gener
     return np.array(positions), observations
 
 
-def _rotation_error_deg(a: np.ndarray, b: np.ndarray) -> float:
-    cos = (np.trace(a.T @ b) - 1) / 2
-    return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
+def _observe_live_position(cams: SimulatedCameras) -> dict:
+    """Cameras' view of the block wherever it *currently* is - unlike
+    `_collect_test_positions`, this never calls `place_block`, so it doesn't
+    teleport the block. `_collect_test_positions` exists to synthesize fresh
+    ground-truth positions for testing calibration accuracy; this exists for
+    the opposite case, tracking a block that a live simulation (physics, or
+    an arm carrying it) is actually moving on its own.
 
-
-def _max_pairwise_mm(points: np.ndarray) -> float:
-    diffs = points[:, None, :] - points[None, :, :]
-    return float(np.linalg.norm(diffs, axis=-1).max() * 1000)
+    Returns {camera: measurement}, only cameras that can currently see it.
+    """
+    seen = {name: cams.observe(name) for name in CAMERAS}
+    return {name: p for name, p in seen.items() if p is not None}
 
 
 def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray, aligned_world: list[dict]) -> None:
@@ -283,8 +295,6 @@ def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray,
     block. (Don't enable the viewer's camera-marker overlay: looking through a
     camera from inside its own marker fills the whole view with green.)
     """
-    import time
-
     import mujoco.viewer
 
     colours = {
@@ -319,6 +329,17 @@ def _show_in_viewer(model, data, cams: SimulatedCameras, test_world: np.ndarray,
             time.sleep(0.02)
 
 
+def _print_position(label: int | str, truth: np.ndarray, aligned: dict[str, np.ndarray]) -> None:
+    print(f"Position {label} - truth {np.array2string(truth, precision=3, suppress_small=True)}")
+    for name in CAMERAS:
+        if name in aligned:
+            al = np.array2string(aligned[name], precision=3, suppress_small=True)
+        else:
+            al = "cannot see block here"
+        print(f"  {name:<15}{al}")
+    print()
+
+
 def run_calibration(
     scene_path: str | None = None,
     n_calib: int = 15,
@@ -328,6 +349,8 @@ def run_calibration(
     seed: int = 0,
     view: bool = False,
     prefer_gl: str = "egl",
+    loop: bool = False,
+    interval: float = 1.0,
 ) -> None:
     if view:
         configure_gl(prefer_gl)  # must happen before the viewer is created
@@ -337,58 +360,42 @@ def run_calibration(
     rng = np.random.default_rng(seed)
     cams = SimulatedCameras(model, data, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=rng)
 
-    print(f"Arms at home pose. Shared frame: {REFERENCE_CAMERA}. Noise: {pixel_sigma} px, {depth_sigma * 1000:.1f} mm depth.")
-    print(f"Image {IMAGE_SIZE[0]}x{IMAGE_SIZE[1]}, focal length {cams.intrinsics[REFERENCE_CAMERA].focal_px:.0f} px")
-
     # --- 1-3: collect measurements and solve ---------------------------------
     pairs = _collect_calibration_pairs(cams, n_calib, rng)
     transforms = calibrate(pairs)
-
-    # --- grade the solved transforms against MuJoCo's true camera poses ------
     ref_true = cams.cam_pose(REFERENCE_CAMERA)
-    print(f"\nCalibration from {n_calib} block positions per camera - error vs MuJoCo's true camera poses:")
-    print(f"  {'camera':<15}{'rotation err':>14}{'translation err':>18}{'fit residual':>15}")
-    print(f"  {REFERENCE_CAMERA:<15}{'(shared frame)':>47}")
-    for name, (own, in_ref) in pairs.items():
-        cam_true = cams.cam_pose(name)
-        # true camera -> reference-camera transform
-        true_R = ref_true.R.T @ cam_true.R
-        true_t = ref_true.R.T @ (cam_true.t - ref_true.t)
-        est = transforms[name]
-        rot_err = _rotation_error_deg(est.R, true_R)
-        trans_err = np.linalg.norm(est.t - true_t) * 1000
-        resid = np.sqrt(np.mean(np.sum((est.apply(own) - in_ref) ** 2, axis=1))) * 1000
-        print(f"  {name:<15}{rot_err:>11.3f} deg{trans_err:>15.2f} mm{resid:>12.2f} mm")
+
+    print(f"Block position, in metres, in the shared frame ({REFERENCE_CAMERA}):\n")
+
+    if loop:
+        # --- keep reporting fresh positions until stopped ---------------------
+        # Stands in for "the block is moving in a live simulation": each tick
+        # samples a new visible position instead of replaying a fixed batch.
+        # A real publisher (step 4) ticks this same loop and sends each
+        # position over the network instead of just printing it - so the
+        # interval matters for real use: Victor's WorldModel marks a part
+        # stale after 2s with no update, so this needs to run faster than that.
+        print(f"Looping every {interval}s - press Ctrl+C to stop.\n")
+        k = 0
+        try:
+            while True:
+                k += 1
+                world, obs = _collect_test_positions(cams, 1, rng)
+                one_aligned = {name: transforms[name].apply(p) for name, p in obs[0].items()}
+                one_truth = (world[0] - ref_true.t) @ ref_true.R
+                _print_position(k, one_truth, one_aligned)
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("Stopped.")
+        return
 
     # --- 4: check on block positions not used for fitting --------------------
     test_world, test_obs = _collect_test_positions(cams, n_test, rng)
     aligned = [{name: transforms[name].apply(p) for name, p in obs.items()} for obs in test_obs]
-    # Truth expressed in the shared frame, for grading only.
-    truth = (test_world - ref_true.t) @ ref_true.R
+    truth = (test_world - ref_true.t) @ ref_true.R  # truth expressed in the shared frame
 
-    print(f"\nHeld-out block positions ({n_test}, not used in the fit). Only cameras that can see the block count:")
-    print(f"  {'#':<3}{'seen by':<40}{'disagree, raw':>15}{'aligned':>10}{'mean err vs truth':>20}")
-    aligned_spread = []
     for k in range(n_test):
-        names = list(aligned[k])
-        raw = _max_pairwise_mm(np.array([test_obs[k][n] for n in names]))
-        pts = np.array([aligned[k][n] for n in names])
-        spread = _max_pairwise_mm(pts)
-        err = np.linalg.norm(pts.mean(axis=0) - truth[k]) * 1000
-        aligned_spread.append(spread)
-        print(f"  {k + 1:<3}{', '.join(names):<40}{raw:>12.1f} mm{spread:>7.2f} mm{err:>17.2f} mm")
-    print(f"  worst / mean aligned disagreement: {max(aligned_spread):.2f} / {np.mean(aligned_spread):.2f} mm")
-
-    print("\nPosition 1 as each camera reports it (metres):")
-    print(f"  {'camera':<15}{'own frame (raw)':>32}{'shared frame (aligned)':>34}")
-    for name in CAMERAS:
-        if name in aligned[0]:
-            raw = np.array2string(test_obs[0][name], precision=3, suppress_small=True)
-            al = np.array2string(aligned[0][name], precision=3, suppress_small=True)
-        else:
-            raw, al = "-", "cannot see block"
-        print(f"  {name:<15}{raw:>32}{al:>34}")
-    print(f"  {'truth':<15}{'':>32}{np.array2string(truth[0], precision=3, suppress_small=True):>34}")
+        _print_position(k + 1, truth[k], aligned[k])
 
     if view:
         # Aligned estimates live in the headcam frame; the viewer draws in world coordinates.

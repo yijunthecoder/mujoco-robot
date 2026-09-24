@@ -30,9 +30,45 @@
       markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.0"/>
     <material name="table_mat" rgba="0.55 0.4 0.28 1"/>
-    <material name="block_right_mat" rgba="0.85 0.55 0.1 1"/>
-    <material name="block_left_mat" rgba="0.15 0.45 0.85 1"/>
     <material name="target_mat" rgba="0.1 0.8 0.1 0.35"/>
+    <!-- Real print colors, not arbitrary per-part colors: values are the
+         actual LDraw palette entries (LDConfig.ldr) used by the zebra
+         pieces' print pattern - Black (0), White (15/16), Reddish_Brown
+         (70). All three pieces share the same plain white plastic body;
+         what distinguishes legs/body/head is the printed artwork itself
+         (see the per-part *_black/_white/_brown meshes below), same as
+         the real physical parts. -->
+    <material name="print_black" rgba="0.106 0.165 0.204 1"/>
+    <material name="print_white" rgba="0.957 0.957 0.957 1"/>
+    <material name="print_brown" rgba="0.373 0.192 0.035 1"/>
+    <!-- alpha=0.001, not 0: mj_ray (camera_calibration.py's line-of-sight
+         check) skips a geom only at EXACTLY alpha=0 - confirmed directly
+         (isolated test: 0.0 -> never hit; 0.001 -> hit correctly, same as
+         a fully opaque geom). This tiny alpha is genuinely invisible to the
+         eye while staying ray-visible, unlike the first fix (color-matching
+         the box to its mesh), which still showed a visible blocky outline
+         peeking past the mesh's actual (non-box) silhouette. -->
+    <material name="collision_hidden" rgba="0 0 0 0.001"/>
+
+    <!-- Zebra DUPLO bricks, converted directly from the LDraw source parts
+         (31111p0e/f/g, not the old flat-color STL export) so the actual
+         printed pattern renders - LDraw encodes a print as differently
+         colored triangles layered on the plain brick body, which a plain
+         STL export throws away (geometry only, no per-face color). Split
+         into one mesh per print color per part since a MuJoCo mesh geom
+         only takes one material; scale 0.01 (STLs in centimetres) matches
+         the old convention exactly - verified against the previous single-
+         color zebra_legs.stl to float32 precision. See
+         ldraw_convert.py notes: LDU (x,y,z) -> STL (x, z, -y) * 0.04. -->
+    <mesh name="zebra_legs_white" file="../meshes/zebra_legs_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_legs_black" file="../meshes/zebra_legs_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_legs_brown" file="../meshes/zebra_legs_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_white" file="../meshes/zebra_body_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_black" file="../meshes/zebra_body_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_body_brown" file="../meshes/zebra_body_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_white" file="../meshes/zebra_head_white.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_black" file="../meshes/zebra_head_black.stl" scale="0.01 0.01 0.01" inertia="shell"/>
+    <mesh name="zebra_head_brown" file="../meshes/zebra_head_brown.stl" scale="0.01 0.01 0.01" inertia="shell"/>
   </asset>
 
   <worldbody>
@@ -59,19 +95,99 @@
       <geom name="table_top" type="box" size="0.375 0.5 0.15" material="table_mat" contype="1" conaffinity="1"/>
     </body>
 
-    <!-- One block starts in front of each arm's natural reach (matches each
-         arm's own grasp waypoint below exactly). Right's is the bottom block
-         (placed at the middle first); left's stacks on top of it. -->
-    <body name="block_right" pos="0.522 -0.3175 -0.1026">
+    <!-- block_right / block_left (the original two-cube stacking demo)
+         removed 2026-09-23 at user's request, to focus on the zebra pieces.
+         stationlite_pick_place.py still looks these up by name
+         (mj_name2id(..., "block_right"/"block_left")) - that script will
+         error (or worse, silently misindex, since a failed lookup returns
+         -1 which numpy reads as the LAST element) if run against this file
+         until it's updated or reverted. Not fixed yet - not currently needed. -->
+
+    <!-- Zebra Lego pieces, resting on a clear part of the table, not yet wired
+         into the pick-place demo above.
+
+         Mesh geoms below deliberately have NO pos/quat override - a plain
+         `<geom type="mesh" mesh="...">` already renders in the mesh's
+         originally-authored orientation (Z-up, studs up), because MuJoCo's
+         internal auto-recentering/rotation of a mesh asset (done for its
+         own inertia bookkeeping) is transparent to a default geom - it
+         doesn't need undoing, and no override is the correct choice.
+
+         This took two wrong attempts to reach (both worth remembering,
+         since it's easy to re-introduce this mistake): inspecting
+         model.mesh_vert directly (early on) showed the long 6.4cm/4-stud
+         axis sitting on Z, which looked like a bug needing a correcting
+         geom quat - but mesh_vert is internal bookkeeping, not what a
+         default geom displays, so there was never anything to correct.
+         Attempt 1 (quat="0.5 0.5 0.5 0.5", matching the mesh's own
+         internally-computed mesh_quat) passed a self-consistency check at
+         the time, but that check compared the fix against itself rather
+         than real ground truth, so it didn't catch that the geom quat
+         composes WITH mesh_quat rather than replacing it - two rotations
+         instead of the intended zero. Attempt 2 tried to solve for the
+         geom quat/pos that cancels mesh_quat out entirely (composes to
+         identity) - conceptually backwards, since identity-after-
+         composition is exactly attempt 1's original bug (mesh_vert's own,
+         uncorrected orientation). Both were finally caught and ruled out
+         by brute-force testing several candidates' actual compiled
+         geom_xmat/geom_xpos against the ORIGINAL raw LDraw-exported STL
+         file's own vertices (nearest-neighbour distance) - no override
+         matched to within floating-point noise (~0.0001mm); both prior
+         attempts were off by 1-3cm.
+
+         Collision is a single box covering the brick BODY only - studs
+         excluded: 6.4 x 3.2 x 3.84 cm, from the bottom (z=-0.0384) up to the
+         top surface, which is exactly the body origin (z=0); the studs stick
+         up another 4.4mm. Leaving the studs out is what makes stacking look
+         right: the next brick's box rests on this one's top surface, 38.4mm
+         (one DUPLO 2x4x2 height) above it, and the studs visually go up into
+         its hollow underside, as on a real brick. With the studs included,
+         stacked bricks floated 6.4mm apart. It still doesn't model the
+         studs/tubes for real interlock (needs convex decomposition later).
+
+         The collision box is listed BEFORE the visual mesh geom in each body
+         (order matters here, unlike most MJCF): camera_calibration.py finds
+         its tracked object's geom via body_geomadr[body], i.e. simply "this
+         body's first geom" - and needs that to land on a solid convex
+         primitive, not the mesh (which has 248 open edges/gaps a raycast can
+         pass straight through, undercounting line-of-sight hits).
+
+         The collision box uses `collision_hidden` (alpha=0.001, defined
+         above) rather than its piece's own opa         The box matches the mesh's own bounding box exactly. That used to
+         make camera_calibration.py's line-of-sight raycast land on the mesh
+         or the box by floating-point noise wherever the two surfaces
+         coincide (a 1mm margin on the box worked around it); now the raycast
+         skips geom group 2 - the visual meshes - so only the box counts.  land on the box; after the fix they became EXACTLY
+         coincident along several faces, and mj_ray started landing on
+         whichever of the two surfaces won by floating-point noise -
+         confirmed directly (camera_calibration.py, previously working,
+         started intermittently hitting the mesh geom instead of the
+         collision geom). The margin removes the tie. -->
+    <body name="zebra_legs" pos="0.2 -0.15 -0.0842">
       <freejoint/>
-      <geom name="block_right" type="box" size="0.02 0.02 0.02" material="block_right_mat" mass="0.05"
-        friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+      <geom name="zebra_legs_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
+        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+      <geom type="mesh" mesh="zebra_legs_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_legs_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_legs_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
     </body>
 
-    <body name="block_left" pos="0.522 0.3175 -0.1026">
+    <body name="zebra_body" pos="0.2 0 -0.0842">
       <freejoint/>
-      <geom name="block_left" type="box" size="0.02 0.02 0.02" material="block_left_mat" mass="0.05"
-        friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+      <geom name="zebra_body_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
+        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+      <geom type="mesh" mesh="zebra_body_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_body_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_body_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
+    </body>
+
+    <body name="zebra_head" pos="0.2 0.15 -0.0842">
+      <freejoint/>
+      <geom name="zebra_head_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
+        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+      <geom type="mesh" mesh="zebra_head_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_head_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
+      <geom type="mesh" mesh="zebra_head_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
     </body>
 
     <!-- Middle stacking point: (0.4148, 0, table height), reachable by both
@@ -100,11 +216,19 @@
   </actuator>
 
   <keyframe>
+    <!-- qpos free-body rows must list every freejoint body in worldbody
+         order (arms first, then zebra_legs/zebra_body/zebra_head) - after
+         swapping block_right/block_left for the 3 zebra pieces, this was
+         left stale: MuJoCo silently zero-pads a short keyframe rather than
+         erroring, so it "loaded fine" while actually teleporting zebra_head
+         to the world origin (inside the robot base) on every reset. Verified
+         numerically before and after this fix. -->
     <key name="home"
       qpos="0 1.98 -1.37 0 0 0 -0.0425 0.0425
             0 1.98 -1.37 0 0 0 -0.0425 0.0425
-            0.522 -0.3175 -0.1026 1 0 0 0
-            0.522 0.3175 -0.1026 1 0 0 0"
+            0.2 -0.15 -0.0842 1 0 0 0
+            0.2 0 -0.0842 1 0 0 0
+            0.2 0.15 -0.0842 1 0 0 0"
       ctrl="0 1.98 -1.37 0 0 0 -0.0425 0.0425
             0 1.98 -1.37 0 0 0 -0.0425 0.0425"/>
   </keyframe>
