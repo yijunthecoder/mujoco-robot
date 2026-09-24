@@ -121,6 +121,24 @@ class ZebraSkillBridge(Node):
         self.get_logger().info(f"-> {status} {command_id}")
 
 
+# fault_bump: where a missed grasp knocks the brick (world frame, towards the
+# stack but clear of it and within the grasp workspace), and how long
+# perception then loses it - longer than one zebra_bt tick (0.5s) so the
+# retried pick sees LOST.
+_BUMP = np.array([0.05, 0.0, 0.0])
+_BUMP_LOST_S = 2.0
+
+
+def _bump_brick(model, data, brick_id: int, delta: np.ndarray) -> None:
+    """Teleport a free-jointed brick by `delta` and stop it - a stand-in for
+    the gripper knocking it on a missed grasp."""
+    joint = model.body_jntadr[brick_id]
+    qpos, qvel = model.jnt_qposadr[joint], model.jnt_dofadr[joint]
+    data.qpos[qpos : qpos + 3] += delta
+    data.qvel[qvel : qvel + 6] = 0.0
+    mujoco.mj_forward(model, data)
+
+
 class _PerceivingSync:
     """`_ThrottledSync` that also gives perception a chance to publish on
     every physics step - grasp_part/place_part call `render.step()` each
@@ -141,10 +159,18 @@ def run_bridge(
     arm: str = "right",
     fault_part: str | None = None,
     fault_offset: float = 0.08,
+    fault_times: int = 0,
+    fault_bump: bool = False,
 ) -> None:
-    """`fault_part` (a part id) is a test hook: every pick of that part is sent
+    """`fault_part` (a part id) is a test hook: picks of that part are sent
     `fault_offset` metres off to the side (world +y), so the gripper closes on
-    air and the pick is reported FAILED - exercises zebra_bt's retry/escalate."""
+    air and the pick is reported FAILED - exercises zebra_bt's retry/escalate.
+    `fault_times` > 0 limits it to that part's first N picks (0 = every pick).
+
+    `fault_bump` also makes each missed pick knock the brick `_BUMP` away and
+    perception lose track of it for `_BUMP_LOST_S` - so zebra_bt sees the part
+    LOST (not just PICK_FAILED) and re-locates it instead of retrying the old
+    position."""
     from .gl import configure_gl
 
     configure_gl(prefer_gl)
@@ -179,6 +205,8 @@ def run_bridge(
     headcam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "headcam")
     headcam_R = data.cam_xmat[headcam_id].reshape(3, 3).copy()
     headcam_t = data.cam_xpos[headcam_id].copy()
+
+    fault_picks = 0  # picks of fault_part seen so far
 
     rclpy.init()
     node = ZebraSkillBridge()
@@ -222,7 +250,11 @@ def run_bridge(
                 part_id = command["part_id"]
                 ctx = contexts[part_id]
 
+                faulted = False
                 if skill == "pick" and part_id == fault_part:
+                    fault_picks += 1
+                    faulted = fault_times == 0 or fault_picks <= fault_times
+                if faulted:
                     center_xyz = center_xyz + np.array([0, fault_offset, 0])
                     node.get_logger().warn(
                         f"FAULT INJECTION: {part_id} pick shifted {fault_offset * 100:.0f} cm in +y"
@@ -247,6 +279,14 @@ def run_bridge(
                     if skill == "pick":
                         perception.status_override[part_id] = None
                     node.report(command_id, "FAILED", str(exc))
+                    if faulted and fault_bump:
+                        _bump_brick(model, data, ctx.brick_id, _BUMP)
+                        perception.lose_track(part_id, _BUMP_LOST_S)
+                        node.get_logger().warn(
+                            f"FAULT INJECTION: missed grasp knocked {part_id} "
+                            f"{np.linalg.norm(_BUMP) * 100:.0f} cm away; perception lost it "
+                            f"for {_BUMP_LOST_S:.0f}s"
+                        )
     finally:
         perception.destroy_node()
         node.destroy_node()

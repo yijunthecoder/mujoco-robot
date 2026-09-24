@@ -62,6 +62,7 @@ PART_LABELS = {"31111p0e": "legs", "31111p0f": "body", "31111p0g": "head"}
 # Which scene body each part id is watched through (stationlite_pick_place.xml).
 PART_BODIES = {"31111p0e": "zebra_legs", "31111p0f": "zebra_body", "31111p0g": "zebra_head"}
 ALL_PART_IDS = tuple(PART_BODIES)
+_LOST_INTERVAL = 0.1  # publish rate while a part is being reported LOST (lose_track)
 
 
 class ZebraPerceptionPublisher(Node):
@@ -112,6 +113,10 @@ class ZebraPerceptionPublisher(Node):
         # on every message, so a plain LOCATED after a successful place would
         # undo his PLACED and make the tree pick the part up again.
         self.status_override: dict[str, str | None] = {pid: None for pid in self.part_ids}
+        # Per part: monotonic time until which it's reported LOST whatever the
+        # cameras see - a test hook for "perception lost track of it" (see
+        # `lose_track`).
+        self.lost_until: dict[str, float] = {pid: 0.0 for pid in self.part_ids}
         self._last_publish = float("-inf")
 
         if model is None:
@@ -151,8 +156,16 @@ class ZebraPerceptionPublisher(Node):
         """Publish if `interval` seconds (wall clock) have passed - cheap
         enough to call every physics step."""
         now = time.monotonic()
-        if force or now - self._last_publish >= self.interval:
+        # Faster while a part is lost, so a LOST lands between two of
+        # zebra_bt's 0.5s ticks even when something else overwrote it.
+        interval = _LOST_INTERVAL if any(now < t for t in self.lost_until.values()) else self.interval
+        if force or now - self._last_publish >= interval:
             self._tick()
+
+    def lose_track(self, pid: str, seconds: float) -> None:
+        """Report `pid` LOST for the next `seconds`, then back to normal."""
+        self.lost_until[pid] = time.monotonic() + seconds
+        self.maybe_publish(force=True)
 
     def _tick(self) -> None:
         self._last_publish = time.monotonic()
@@ -162,6 +175,9 @@ class ZebraPerceptionPublisher(Node):
     def _report(self, pid: str) -> None:
         label = PART_LABELS[pid]
         override = self.status_override[pid]
+        if time.monotonic() < self.lost_until[pid]:
+            self._publish(f"{pid},LOST", f"{label}  LOST     (lost track - test hook)")
+            return
         seen = _observe_live_position(self.cams[pid])
         available = [name for name in CAMERAS if name in seen]
 

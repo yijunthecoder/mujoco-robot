@@ -82,6 +82,24 @@ Change how far off the pick goes (metres, default `0.08`). Anything above
 $ bash scripts/run_zebra.sh --fail-part body --fail-offset 0.03
 ```
 
+Only fail the first N picks with `--fail-times N`. Here the body's first pick
+misses, and the retry picks it normally:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part body --fail-times 1
+```
+→ `3 placed, 0 escalated`, body `attempt 2`
+
+Relocate instead of retry: add `--fail-bump`. The missed pick also knocks the
+brick 5 cm towards the stack, and perception reports it `LOST` for 2s. The
+tree logs `will re-locate and retry`, waits for perception to find the brick
+again, and picks it at its **new** position:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part body --fail-times 1 --fail-bump
+```
+→ `3 placed, 0 escalated` (~62s)
+
 No perception at all: run only the tree, without the bridge. The legs are
 never found; after 3 searches of 10s each they escalate, and body and head
 are skipped:
@@ -95,6 +113,14 @@ $ ros2 run build_a_zebra zebra_bt_node
 
 If the MuJoCo window doesn't appear, restart WSL from Windows PowerShell
 (`wsl --shutdown`), then open WSL and run again.
+
+If a run finishes with `3 placed` after ~1s without the arm moving, a bridge
+from an earlier run is still open and reporting every part as `PLACED`. Close
+its MuJoCo window, or stop everything:
+
+```bash
+$ pkill -9 -f zebra_skill_bridge.py; pkill -f zebra_bt_node
+```
 
 <details>
 <summary>Running the two parts in separate terminals instead</summary>

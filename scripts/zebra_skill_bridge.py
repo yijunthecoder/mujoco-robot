@@ -41,12 +41,23 @@ def main() -> None:
         "--fail-offset", type=float, default=0.08,
         help="how far off (metres, +y) --fail-part's picks go (default: 0.08)",
     )
+    parser.add_argument(
+        "--fail-times", type=int, default=0,
+        help="only fail --fail-part's first N picks, then pick normally (default: 0 = every pick)",
+    )
+    parser.add_argument(
+        "--fail-bump", action="store_true",
+        help="a missed pick also knocks the brick 5 cm away and perception loses it "
+             "for 2s, so the tree re-locates instead of retrying",
+    )
     args = parser.parse_args()
 
     run_bridge(
         prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,
         fault_part=PART_NAMES[args.fail_part] if args.fail_part else None,
         fault_offset=args.fail_offset,
+        fault_times=args.fail_times,
+        fault_bump=args.fail_bump,
     )
 
 
