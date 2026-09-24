@@ -37,7 +37,6 @@ namespace zebra_bt
 
 // ---------------------------------------------------------------------
 // Human-readable part label: "legs" for "31111p0e".
-// Falls back to the raw ID if the mapping is missing.
 // ---------------------------------------------------------------------
 static std::string prettyPart(const std::string & id, const RolesMapPtr & roles)
 {
@@ -281,25 +280,34 @@ public:
 
   BT::NodeStatus onRunning() override
   {
-    if (++search_ticks_ < 2) return BT::NodeStatus::RUNNING;
+    ++search_ticks_;
 
-    auto state = wm_->getPartState(part_);
+    const auto state = wm_->getPartState(part_);
 
-    if (state.status != PartStatus::LOCATED && !state.seen_by_perception) {
-      wm_->setPartPosition(part_, 0.40, 0.0, 0.32);
+    // Success: perception has located the part.
+    if (state.seen_by_perception && state.status == PartStatus::LOCATED) {
+      RCLCPP_INFO(
+        logger_,
+        "[LOCATE]  %s: found at (%.2f, %.2f, %.2f)",
+        prettyPart(part_, roles_).c_str(),
+        state.position.x, state.position.y, state.position.z);
+      return BT::NodeStatus::SUCCESS;
     }
 
-    wm_->setPartStatus(part_, PartStatus::LOCATED);
+    // Timeout: no perception within budget. Mark LOST so RecoveryPolicy
+    // (called from onStart next tick) decides RETRY / RELOCATE / ESCALATE.
+    if (search_ticks_ > locate_timeout_ticks_) {
+      RCLCPP_WARN(
+        logger_,
+        "[LOCATE]  %s: no perception after %.1fs -- marking LOST",
+        prettyPart(part_, roles_).c_str(),
+        locate_timeout_ticks_ / 2.0);
+      wm_->setPartStatus(part_, PartStatus::LOST);
+      return BT::NodeStatus::FAILURE;
+    }
 
-    RCLCPP_INFO(
-      logger_,
-      "[LOCATE]  %s: found at (%.2f, %.2f, %.2f)",
-      prettyPart(part_, roles_).c_str(),
-      wm_->getPartState(part_).position.x,
-      wm_->getPartState(part_).position.y,
-      wm_->getPartState(part_).position.z);
-
-    return BT::NodeStatus::SUCCESS;
+    // Still waiting.
+    return BT::NodeStatus::RUNNING;
   }
 
   void onHalted() override {}
@@ -311,6 +319,7 @@ private:
   rclcpp::Logger logger_;
   std::string part_;
   int search_ticks_{0};
+  static constexpr int locate_timeout_ticks_{20};   // 10 s at 2 Hz
 };
 
 class PickPart : public BT::StatefulActionNode
@@ -711,6 +720,7 @@ int main(int argc, char ** argv)
     rate.sleep();
   }
 
+  const bool completed = world_model->allPartsResolved();
   const double elapsed_sec = tick_count / TICK_HZ;
 
   std::printf("\n");
@@ -741,7 +751,11 @@ int main(int argc, char ** argv)
               elapsed_sec, tick_count, TICK_HZ);
   std::printf("══════════════════════════════════════════\n\n");
 
-  if (escalated == 0) {
+  if (!completed) {
+    RCLCPP_WARN(node->get_logger(),
+      "Build aborted early (Ctrl+C). %d of %zu parts resolved.",
+      placed + escalated, part_ids.size());
+  } else if (escalated == 0) {
     RCLCPP_INFO(node->get_logger(), "Zebra fully assembled.");
   } else {
     RCLCPP_ERROR(node->get_logger(),
