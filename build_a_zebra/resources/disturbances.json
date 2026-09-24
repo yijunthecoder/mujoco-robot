@@ -1,0 +1,23 @@
+{
+  "check_interval_ticks": 4,
+  "events": [
+    {
+      "type": "LOSS",
+      "probability": 0.0,
+      "severity": "major",
+      "description": "Perception loses track of the part entirely"
+    },
+    {
+      "type": "RELOCATION",
+      "probability": 0.0,
+      "severity": "minor",
+      "description": "Part gets bumped to a new nearby position, still findable"
+    },
+    {
+      "type": "SENSOR_NOISE",
+      "probability": 0.0,
+      "severity": "minor",
+      "description": "Small position jitter from sensor noise, doesn't require re-locating"
+    }
+  ]
+}

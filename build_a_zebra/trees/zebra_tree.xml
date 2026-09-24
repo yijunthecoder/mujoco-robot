@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<root BTCPP_format="4" main_tree_to_execute="BuildZebra">
+
+  <!--
+    Top-level tree: build the zebra by assembling each real DUPLO part in
+    turn, in the physical stacking order (Legs -> Body -> Head), matching
+    TaskModel's buildOrder() for the "zebra" build_target in bom.json.
+    Each part reuses the same AssemblePart subtree, just with a different
+    "part" value passed in via the blackboard-style port.
+  -->
+  <BehaviorTree ID="BuildZebra">
+    <Sequence name="BuildZebraSequence">
+      <SubTree ID="AssemblePart" name="AssembleLegs" part="31111p0e"/> <!-- Zebra Legs -->
+      <SubTree ID="AssemblePart" name="AssembleBody" part="31111p0f"/> <!-- Zebra Body -->
+      <SubTree ID="AssemblePart" name="AssembleHead" part="31111p0g"/> <!-- Zebra Head -->
+    </Sequence>
+  </BehaviorTree>
+
+  <!--
+    Per-part assembly logic. This is where state is detected and the
+    next appropriate action is selected:
+
+      1. If the part is already PLACED, skip it entirely (Fallback short-circuits).
+      2. If the part has been ESCALATED (Recovery Manager gave up on it
+         automatically after too many failures), also skip it permanently:
+         it now needs a human, not more automatic retries.
+      3. Otherwise, make sure we know where it is (LOCATED). If it's LOST,
+         LocatePart re-searches for it before continuing.
+      4. Attempt to pick it up, wrapped in RecoveryPolicy: on failure, the
+         Recovery Manager decides RETRY, RELOCATE, or ESCALATE, rather than
+         a fixed retry count hardcoded here.
+      5. Once picked, place it onto the zebra assembly.
+  -->
+  <BehaviorTree ID="AssemblePart">
+    <Fallback name="PartFallback">
+      <IsPartPlaced part="{part}"/>
+      <IsPartEscalated part="{part}"/>
+
+      <Sequence name="PartAssemblySequence">
+        <Fallback name="EnsureLocated">
+          <IsPartLocated part="{part}"/>
+          <LocatePart part="{part}"/>
+        </Fallback>
+
+        <RecoveryPolicy part="{part}">
+          <PickPart part="{part}"/>
+        </RecoveryPolicy>
+
+        <PlacePart part="{part}"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+
+  <!-- Metadata BT.CPP / Groot2 use to know each node's ports -->
+  <TreeNodesModel>
+    <Condition ID="IsPartPlaced">
+      <input_port name="part"/>
+    </Condition>
+    <Condition ID="IsPartLocated">
+      <input_port name="part"/>
+    </Condition>
+    <Condition ID="IsPartEscalated">
+      <input_port name="part"/>
+    </Condition>
+    <Action ID="LocatePart">
+      <input_port name="part"/>
+    </Action>
+    <Action ID="PickPart">
+      <input_port name="part"/>
+    </Action>
+    <Decorator ID="RecoveryPolicy">
+      <input_port name="part"/>
+    </Decorator>
+    <Action ID="PlacePart">
+      <input_port name="part"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>
