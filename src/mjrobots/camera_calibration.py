@@ -58,6 +58,7 @@ CAMERAS = ("headcam", "refcam", "left_handcam", "right_handcam")
 HAND_CAMERAS = ("left_handcam", "right_handcam")
 REFERENCE_CAMERA = "headcam"  # its frame becomes the shared frame
 IMAGE_SIZE = (640, 480)  # (width, height); the scene XML leaves resolution unset
+_RAY_GROUPS = np.array([1, 1, 0, 1, 1, 1], dtype=np.uint8)  # all geom groups except 2 (visual meshes)
 
 # Where the block may be placed (world frame, metres): across the table, from
 # table height up to a few cm above it.
@@ -183,7 +184,10 @@ class SimulatedCameras:
         direction = direction / np.linalg.norm(direction)
         hit_geom = np.zeros(1, dtype=np.int32)
         # bodyexclude: don't let the camera's own housing block its view.
-        mujoco.mj_ray(self.model, self.data, origin, direction, None, 1, self.model.cam_bodyid[i], hit_geom)
+        # geomgroup: skip group 2 (the bricks' visual meshes) so only their
+        # solid collision boxes count - the two share faces exactly, and a
+        # ray would otherwise hit whichever one floating-point noise favours.
+        mujoco.mj_ray(self.model, self.data, origin, direction, _RAY_GROUPS, 1, self.model.cam_bodyid[i], hit_geom)
         return hit_geom[0] == self._block_geom
 
     def observe(self, name: str, noisy: bool = True) -> np.ndarray | None:

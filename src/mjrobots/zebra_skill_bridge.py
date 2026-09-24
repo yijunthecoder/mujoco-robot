@@ -12,10 +12,11 @@ matching reply arrives on `/zebra/skill_status`:
 
     {"command_id", "status": "SUCCEEDED"|"FAILED"[, "message"]}
 
-This node is that reply: for one part (zebra_legs, id "31111p0e" - see
-bom.json; other parts are ignored for now) and one arm, it keeps a MuJoCo
-viewer running, executes `grasp_part`/`place_part` (zebra_pick_place.py)
-against whatever target the command carries, and reports the result back.
+This node is that reply: for all three zebra parts (legs/body/head, ids
+31111p0e/f/g - see bom.json) and one arm, it keeps a MuJoCo viewer running,
+executes `grasp_part`/`place_part` (zebra_pick_place.py), and reports the
+result back. Picks go to the command's target; places ignore it for now and
+build the stack on the middle circle - see `_stack_center` in `run_bridge`.
 
 Coordinate note (two conversions needed before `target` is usable as an IK
 goal):
@@ -34,8 +35,8 @@ goal):
    the geometric center that `grasp_part`/`place_part` expect (see
    `_BRICK_CENTER_OFFSET_Z`) - applied in world frame, after (1).
 
-Perception note: this process also publishes perception
-(`/zebra/perception_updates`), from its OWN live simulation - a
+Perception note: this process also publishes perception for all three
+zebra parts (`/zebra/perception_updates`), from its OWN live simulation - a
 `ZebraPerceptionPublisher` embedded on this same model/data. A separate
 zebra_publisher.py process would load its own copy of the scene, where
 nothing ever moves, and keep reporting the brick's spawn position forever.
@@ -64,11 +65,12 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .zebra_publisher import ZebraPerceptionPublisher
+from .zebra_publisher import ALL_PART_IDS, PART_BODIES, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
     _DEFAULT_SCENE,
     _TABLE_PLACE_XYZ,
+    BRICK_HEIGHT,
     ZebraArmContext,
     grasp_part,
     place_part,
@@ -76,11 +78,13 @@ from .zebra_pick_place import (
 
 COMMAND_TOPIC = "/zebra/skill_commands"
 STATUS_TOPIC = "/zebra/skill_status"
-OUR_PART_ID = "31111p0e"  # zebra_legs - see bom.json
+# Stack level of each part (0 = on the table): the zebra is built bottom-up,
+# legs -> body -> head, same order as bom.json's role_order.
+STACK_LEVEL = {"31111p0e": 0, "31111p0f": 1, "31111p0g": 2}
 
 
 class ZebraSkillBridge(Node):
-    """Subscribes to Victor's skill commands for our part, queues them for
+    """Subscribes to Victor's skill commands for the zebra parts, queues them for
     the main (viewer) thread to execute, and publishes results back."""
 
     def __init__(self) -> None:
@@ -96,10 +100,15 @@ class ZebraSkillBridge(Node):
             self.get_logger().warn(f"ignoring malformed command: {msg.data!r}")
             return
 
-        if command.get("part_id") != OUR_PART_ID:
-            return  # not ours - body/head aren't wired up yet
+        part_id = command.get("part_id")
+        self.get_logger().info(f"<- {command.get('skill')} {part_id} {command.get('target')}")
 
-        self.get_logger().info(f"<- {command.get('skill')} {command.get('part_id')} {command.get('target')}")
+        if part_id not in STACK_LEVEL:
+            # Fail unknown parts right away instead of staying silent: silence
+            # makes each attempt wait out zebra_bt's 30s skill timeout.
+            self.report(command.get("command_id", ""), "FAILED", f"unknown part '{part_id}'")
+            return
+
         self.pending.put(command)
 
     def report(self, command_id: str, status: str, message: str = "") -> None:
@@ -137,20 +146,24 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
     mujoco.mj_forward(model, data)
 
-    ctx = ZebraArmContext(model, data, arm)
+    # One pick/place context per part (same arm, own brick + carry).
+    contexts = {pid: ZebraArmContext(model, data, arm, PART_BODIES[pid]) for pid in ALL_PART_IDS}
     clock = _RealtimeClock(dt=model.opt.timestep)
 
-    # Victor's PlacePart currently sends the part's own last-seen position as
-    # the place target (main.cpp: `send("place", part_, state.position)`), so
-    # honoring it just puts the brick back where it was picked from. Until his
-    # tree sends a real assembly position, every place goes to the middle
-    # circle (target_site) instead, at the same resting height the brick
-    # spawns at on the table - same target as zebra_pick_place.run_demo.
-    place_center_xyz = np.array([
-        _TABLE_PLACE_XYZ[0],
-        _TABLE_PLACE_XYZ[1],
-        data.xpos[ctx.brick_id][2] + _BRICK_CENTER_OFFSET_Z,
-    ])
+    # Place targets are ours for now, not the command's: zebra_bt's
+    # placeTargetFor() sends world-frame coordinates while everything else
+    # (perception, pick targets, the conversion below) uses headcam frame -
+    # until that's agreed, each part goes onto a stack on the middle circle
+    # (target_site): legs on the table, body one brick height up, head two.
+    # Table resting height = the bricks' spawn height (all three spawn on it).
+    table_center_z = data.xpos[contexts["31111p0e"].brick_id][2] + _BRICK_CENTER_OFFSET_Z
+
+    def _stack_center(part_id: str) -> np.ndarray:
+        return np.array([
+            _TABLE_PLACE_XYZ[0],
+            _TABLE_PLACE_XYZ[1],
+            table_center_z + STACK_LEVEL[part_id] * BRICK_HEIGHT,
+        ])
 
     # headcam's own pose, to invert perception's "shared frame (headcam)"
     # coordinates back into MuJoCo world coordinates - see module docstring.
@@ -160,7 +173,12 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
 
     rclpy.init()
     node = ZebraSkillBridge()
-    perception = ZebraPerceptionPublisher(part_id=OUR_PART_ID, model=model, data=data, use_timer=False)
+    # 0.5s, not the standalone 1s: during a move, IK solves between physics
+    # steps can delay a publish, and 1s left gaps up to ~1.98s - right at
+    # zebra_bt's 2s staleness limit.
+    perception = ZebraPerceptionPublisher(
+        part_ids=ALL_PART_IDS, interval=0.5, model=model, data=data, use_timer=False
+    )
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(perception)
@@ -169,7 +187,7 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
         with mujoco.viewer.launch_passive(model, data) as viewer:
             render = _PerceivingSync(_ThrottledSync(viewer, model), perception)
             node.get_logger().info(
-                f"Ready - watching {COMMAND_TOPIC} for part '{OUR_PART_ID}' ({arm} arm)."
+                f"Ready - watching {COMMAND_TOPIC} for legs/body/head ({arm} arm)."
             )
 
             while viewer.is_running() and rclpy.ok():
@@ -192,14 +210,16 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
                 center_xyz = world_origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
                 skill = command["skill"]
                 command_id = command["command_id"]
+                part_id = command["part_id"]
+                ctx = contexts[part_id]
 
                 try:
                     if skill == "pick":
                         grasp_part(ctx, render, clock, center_xyz)
-                        perception.status_override = "PICKED"
+                        perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
-                        place_part(ctx, render, clock, place_center_xyz)  # ignores command target - see above
-                        perception.status_override = "PLACED"
+                        place_part(ctx, render, clock, _stack_center(part_id))  # ignores command target - see above
+                        perception.status_override[part_id] = "PLACED"
                     else:
                         raise ValueError(f"unknown skill '{skill}'")
                     # Publish the new status BEFORE replying, so no stale
@@ -209,7 +229,7 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
                 except Exception as exc:  # report failure to the BT rather than crashing the bridge
                     node.get_logger().error(f"{skill} {command_id} failed: {exc}")
                     if skill == "pick":
-                        perception.status_override = None
+                        perception.status_override[part_id] = None
                     node.report(command_id, "FAILED", str(exc))
     finally:
         perception.destroy_node()

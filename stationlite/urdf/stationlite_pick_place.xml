@@ -135,10 +135,15 @@
          matched to within floating-point noise (~0.0001mm); both prior
          attempts were off by 1-3cm.
 
-         Collision is a single box sized to the full bounding box (raw bbox
-         6.4 x 3.2 x 4.28 cm, center 1.7cm below the mesh's own origin) as a
-         placeholder - it does not yet model the studs/tubes for real
-         interlock (needs convex decomposition later, see project notes).
+         Collision is a single box covering the brick BODY only - studs
+         excluded: 6.4 x 3.2 x 3.84 cm, from the bottom (z=-0.0384) up to the
+         top surface, which is exactly the body origin (z=0); the studs stick
+         up another 4.4mm. Leaving the studs out is what makes stacking look
+         right: the next brick's box rests on this one's top surface, 38.4mm
+         (one DUPLO 2x4x2 height) above it, and the studs visually go up into
+         its hollow underside, as on a real brick. With the studs included,
+         stacked bricks floated 6.4mm apart. It still doesn't model the
+         studs/tubes for real interlock (needs convex decomposition later).
 
          The collision box is listed BEFORE the visual mesh geom in each body
          (order matters here, unlike most MJCF): camera_calibration.py finds
@@ -148,18 +153,11 @@
          pass straight through, undercounting line-of-sight hits).
 
          The collision box uses `collision_hidden` (alpha=0.001, defined
-         above) rather than its piece's own opaque material - a first
-         attempt at color-matching the box to the mesh (to hide it visually)
-         left a visible blocky outline peeking past the mesh's actual
-         (non-box) silhouette, especially around the studs. See
-         `collision_hidden`'s own comment for why 0.001 and not 0 - alpha=0
-         was tried first and broke mj_ray's line-of-sight check entirely.
-
-         The box's size (0.033 0.017 0.0224) is 1mm larger per half-extent
-         than the mesh's own exact bounding box (0.032 0.016 0.0214) -
-         needed once the mesh geom's pos/quat were corrected above: before
-         that fix the two surfaces didn't quite align, so raycasts
-         happened to land on the box; after the fix they became EXACTLY
+         above) rather than its piece's own opa         The box matches the mesh's own bounding box exactly. That used to
+         make camera_calibration.py's line-of-sight raycast land on the mesh
+         or the box by floating-point noise wherever the two surfaces
+         coincide (a 1mm margin on the box worked around it); now the raycast
+         skips geom group 2 - the visual meshes - so only the box counts.  land on the box; after the fix they became EXACTLY
          coincident along several faces, and mj_ray started landing on
          whichever of the two surfaces won by floating-point noise -
          confirmed directly (camera_calibration.py, previously working,
@@ -167,7 +165,7 @@
          collision geom). The margin removes the tie. -->
     <body name="zebra_legs" pos="0.2 -0.15 -0.0842">
       <freejoint/>
-      <geom name="zebra_legs_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
+      <geom name="zebra_legs_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_legs_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_legs_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
@@ -176,7 +174,7 @@
 
     <body name="zebra_body" pos="0.2 0 -0.0842">
       <freejoint/>
-      <geom name="zebra_body_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
+      <geom name="zebra_body_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_body_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_body_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
@@ -185,7 +183,7 @@
 
     <body name="zebra_head" pos="0.2 0.15 -0.0842">
       <freejoint/>
-      <geom name="zebra_head_collision" type="box" size="0.033 0.017 0.0224" pos="0 0 -0.017"
+      <geom name="zebra_head_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
         material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_head_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_head_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>

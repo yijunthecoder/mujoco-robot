@@ -31,10 +31,14 @@ from .stationlite_pick_place import (
     _make_carry,
 )
 
-# The brick's geometric center sits 1.7cm below its body origin (the
-# collision box's local pos="0 0 -0.017" in the XML) - see
-# stationlite_pick_place.xml's zebra-piece comment for the full derivation.
-_BRICK_CENTER_OFFSET_Z = -0.017
+# The brick body's geometric center sits 1.92cm below its body origin: the
+# origin is the top surface (where the studs start) and the body is 3.84cm
+# tall (collision box pos="0 0 -0.0192" in the XML - see
+# stationlite_pick_place.xml's zebra-piece comment).
+_BRICK_CENTER_OFFSET_Z = -0.0192
+# Height of one DUPLO 2x4x2 brick body, studs excluded: stacked bricks' origins
+# are exactly this far apart.
+BRICK_HEIGHT = 0.0384
 _TABLE_PLACE_XYZ = np.array([0.4148, 0.0, -0.1216])  # target_site, table height
 _HOVER_DZ = 0.10  # scanned reachable across the whole grasp/place workspace
 
@@ -126,9 +130,9 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 100, carry=ctx.carry)
 
     # _make_anchor pins the body's ORIGIN (qpos), not its geometric center -
-    # and this brick's origin sits 1.7cm above its center (see
+    # and this brick's origin sits 1.92cm above its center (see
     # _BRICK_CENTER_OFFSET_Z). Anchoring at center_xyz directly would wedge
-    # the brick 1.7cm into the table - confirmed by testing: it held fine
+    # the brick ~2cm into the table - confirmed by testing: it held fine
     # during the anchor (which forces the position every step regardless of
     # penetration) then popped back out the moment the anchor released and
     # real contact physics took over. Anchor target must be the

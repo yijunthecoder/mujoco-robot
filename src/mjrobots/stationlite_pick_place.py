@@ -131,7 +131,7 @@ def _make_carry(model, data, block_body_id, f1_name, f2_name, keep_grasp_offset:
     `keep_grasp_offset=True` holds the body where it was when the carry
     first ran, relative to the fingers, instead of putting its ORIGIN at the
     finger midpoint. Needed when the origin isn't at the grip point - e.g.
-    the zebra bricks, whose origin sits 1.7cm above their center: snapping
+    the zebra bricks, whose origin sits ~2cm above their center: snapping
     the origin to the fingers (aimed at the center) carried them ~2cm too
     low, visibly sinking into the table while being picked up/set down.
     Make a fresh carry per grasp so the offset is re-captured each time.
