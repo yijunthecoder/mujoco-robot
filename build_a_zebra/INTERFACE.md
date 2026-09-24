@@ -13,7 +13,7 @@ simulator (`mujoco-robots`).
 ```bash
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=42             # same on both machines
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpps
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ## 2b. Coordinate frame
 
