@@ -8,11 +8,23 @@
     Each part reuses the same AssemblePart subtree, just with a different
     "part" value passed in via the blackboard-style port.
   -->
+  
   <BehaviorTree ID="BuildZebra">
     <Sequence name="BuildZebraSequence">
-      <SubTree ID="AssemblePart" name="AssembleLegs" part="31111p0e"/> <!-- Zebra Legs -->
-      <SubTree ID="AssemblePart" name="AssembleBody" part="31111p0f"/> <!-- Zebra Body -->
-      <SubTree ID="AssemblePart" name="AssembleHead" part="31111p0g"/> <!-- Zebra Head -->
+      <SubTree ID="AssemblePart" name="AssembleLegs" part="31111p0e"/>
+
+      <!-- Only attempt body if legs actually got placed. If legs escalated,
+           skip body entirely — it would have nothing to stand on. -->
+      <Fallback name="BodyIfLegsPlaced">
+        <IsPartEscalated part="31111p0e"/>
+        <SubTree ID="AssemblePart" name="AssembleBody" part="31111p0f"/>
+      </Fallback>
+
+      <!-- Same for head: needs body underneath it. -->
+      <Fallback name="HeadIfBodyPlaced">
+        <IsPartEscalated part="31111p0f"/>
+        <SubTree ID="AssemblePart" name="AssembleHead" part="31111p0g"/>
+      </Fallback>
     </Sequence>
   </BehaviorTree>
 

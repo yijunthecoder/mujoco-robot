@@ -81,6 +81,16 @@ void WorldModel::perceptionCallback(const std_msgs::msg::String::SharedPtr msg)
     return;
   }
 
+  // Guard: don't let incoming perception downgrade a part the BT has
+  // already moved past locate-stage. Once a part is PLACED or ESCALATED,
+  // a stale or late LOCATED/LOST message should be ignored.
+  const auto current = it->second.status;
+  if ((current == PartStatus::PLACED || current == PartStatus::ESCALATED) &&
+      (status == PartStatus::LOCATED || status == PartStatus::LOST ||
+       status == PartStatus::PICKED)) {
+    return;
+  }
+
   it->second.status = status;
   if (!xs.empty() && !ys.empty() && !zs.empty()) {
     it->second.position.x = stod(xs);

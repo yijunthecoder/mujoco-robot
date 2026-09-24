@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -34,6 +35,33 @@ using RolesMapPtr = std::shared_ptr<const std::map<std::string, std::string>>;
 
 namespace zebra_bt
 {
+  // ---------------------------------------------------------------------
+  // Assembly pose: where each part goes when it's placed.
+  // Legs go on the table, body stacks on top of legs, head on top of body.
+  // Tune these to match the physical assembly point in the sim.
+  // ---------------------------------------------------------------------
+  static geometry_msgs::msg::Point placeTargetFor(const std::string & part_id)
+  {
+    constexpr double TABLE_X      = 0.4148;
+    constexpr double TABLE_Y      = 0.0;
+    constexpr double TABLE_Z      = -0.1026;
+    constexpr double BRICK_HEIGHT = 0.04;
+
+    geometry_msgs::msg::Point p;
+    p.x = TABLE_X;
+    p.y = TABLE_Y;
+
+    if (part_id == "31111p0e") {          // legs
+      p.z = TABLE_Z;
+    } else if (part_id == "31111p0f") {   // body
+      p.z = TABLE_Z + BRICK_HEIGHT;
+    } else if (part_id == "31111p0g") {   // head
+      p.z = TABLE_Z + 2 * BRICK_HEIGHT;
+    } else {
+      p.z = TABLE_Z;
+    }
+    return p;
+  }
 
 // ---------------------------------------------------------------------
 // Human-readable part label: "legs" for "31111p0e".
@@ -434,12 +462,14 @@ public:
         prettyPart(part_, roles_).c_str());
       return BT::NodeStatus::FAILURE;
     }
-
-    command_id_ = bridge_->send("place", part_, state.position);
+    
+    const auto place_target = placeTargetFor(part_);
+    command_id_ = bridge_->send("place", part_, place_target);
     RCLCPP_INFO(
       logger_,
-      "[PLACE]   %s: placing  [%s]",
+      "[PLACE]   %s: placing at (%.2f, %.2f, %.2f)  [%s]",
       prettyPart(part_, roles_).c_str(),
+      place_target.x, place_target.y, place_target.z,
       command_id_.c_str());
 
     wait_ticks_ = 0;
@@ -569,6 +599,12 @@ private:
 
 int main(int argc, char ** argv)
 {
+  // Human-readable log format. Must be set BEFORE rclcpp::init —
+  // rcutils reads this env var once at startup.
+  setenv("RCUTILS_CONSOLE_OUTPUT_FORMAT",
+         "[{severity}] [{date_time_with_ms}] {message}",
+         1);
+
   rclcpp::init(argc, argv);
   auto node = std::make_shared<rclcpp::Node>("zebra_bt_node");
 
@@ -703,13 +739,19 @@ int main(int argc, char ** argv)
 
   print_status_board(0);
 
+  // Read ALL waiting messages each tick, not just one (spin_some only takes
+  // one message per subscription per call, so perception backed up).
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+
   while (rclcpp::ok() && !world_model->allPartsResolved()) {
-    rclcpp::spin_some(node);
+    executor.spin_all(std::chrono::milliseconds(100));
 
     if (tick_count % disturbance_generator.checkIntervalTicks() == 0) {
       disturbance_generator.maybeTrigger(world_model, part_ids);
     }
 
+    
     tree.tickOnce();
     tick_count++;
 
