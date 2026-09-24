@@ -135,7 +135,16 @@ class _PerceivingSync:
         self._perception.maybe_publish()
 
 
-def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "right") -> None:
+def run_bridge(
+    prefer_gl: str = "egl",
+    scene_path: str | None = None,
+    arm: str = "right",
+    fault_part: str | None = None,
+    fault_offset: float = 0.08,
+) -> None:
+    """`fault_part` (a part id) is a test hook: every pick of that part is sent
+    `fault_offset` metres off to the side (world +y), so the gripper closes on
+    air and the pick is reported FAILED - exercises zebra_bt's retry/escalate."""
     from .gl import configure_gl
 
     configure_gl(prefer_gl)
@@ -213,9 +222,16 @@ def run_bridge(prefer_gl: str = "egl", scene_path: str | None = None, arm: str =
                 part_id = command["part_id"]
                 ctx = contexts[part_id]
 
+                if skill == "pick" and part_id == fault_part:
+                    center_xyz = center_xyz + np.array([0, fault_offset, 0])
+                    node.get_logger().warn(
+                        f"FAULT INJECTION: {part_id} pick shifted {fault_offset * 100:.0f} cm in +y"
+                    )
+
                 try:
                     if skill == "pick":
                         grasp_part(ctx, render, clock, center_xyz)
+                        node.get_logger().info(f"grasped {part_id} ({ctx.grip_miss() * 100:.1f} cm off center)")
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
                         place_part(ctx, render, clock, _stack_center(part_id))  # ignores command target - see above

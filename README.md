@@ -31,9 +31,10 @@ All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 ### Zebra pick/place with Victor's behavior tree (the main one)
 
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
-terminal. The MuJoCo window opens, the right arm picks `zebra_legs` up and
-places it in the green circle. Output lines are labelled `[tree]` /
-`[bridge]`; close the MuJoCo window or press Ctrl+C to stop both.
+terminal. The MuJoCo window opens and the right arm stacks legs -> body ->
+head on the green circle, finishing with `3 placed, 0 escalated` (~55s).
+Output lines are labelled `[tree]` / `[bridge]`; close the MuJoCo window or
+press Ctrl+C to stop both.
 
 ```bash
 $ bash scripts/run_zebra.sh
@@ -45,8 +46,55 @@ Use the left arm instead:
 $ bash scripts/run_zebra.sh --arm left
 ```
 
-Only `zebra_legs` is wired up so far — the tree waits ~30s each for body and
-head, skips them, then finishes with `1 placed, 2 escalated`.
+### Fail tests (Victor's retry / escalate behaviour)
+
+`--fail-part` sends every pick of that part 8 cm to the side of the real
+brick. The gripper closes on nothing, the bridge's grasp check reports the
+pick `FAILED`, and the tree retries it. After the 4th failed pick the tree
+gives up on that part ("retries exhausted, escalating to human"), and
+anything stacked on top of it is skipped.
+
+Body fails: legs placed, body escalated after 4 attempts, head skipped:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part body
+```
+→ `1 placed, 2 escalated`
+
+Legs fail: nothing can be stacked, so all three escalate:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part legs
+```
+→ `0 placed, 3 escalated`
+
+Head fails: legs and body placed, head escalated:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part head
+```
+→ `2 placed, 1 escalated`
+
+Change how far off the pick goes (metres, default `0.08`). Anything above
+~0.017 (half the brick's narrow side) counts as a miss:
+
+```bash
+$ bash scripts/run_zebra.sh --fail-part body --fail-offset 0.03
+```
+
+No perception at all: run only the tree, without the bridge. The legs are
+never found; after 3 searches of 10s each they escalate, and body and head
+are skipped:
+
+```bash
+$ source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+$ export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+$ ros2 run build_a_zebra zebra_bt_node
+```
+→ `0 placed, 3 escalated` (~34s)
+
+If the MuJoCo window doesn't appear, restart WSL from Windows PowerShell
+(`wsl --shutdown`), then open WSL and run again.
 
 <details>
 <summary>Running the two parts in separate terminals instead</summary>

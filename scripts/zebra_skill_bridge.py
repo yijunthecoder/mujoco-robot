@@ -25,15 +25,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from mjrobots.zebra_skill_bridge import run_bridge
 
+PART_NAMES = {"legs": "31111p0e", "body": "31111p0f", "head": "31111p0g"}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gl", default="egl", help="preferred rendering backend (default: egl)")
     parser.add_argument("--scene", default=None, help="path to stationlite_pick_place.xml")
     parser.add_argument("--arm", choices=["left", "right"], default="right", help="which arm to move")
+    parser.add_argument(
+        "--fail-part", choices=sorted(PART_NAMES), default=None,
+        help="test hook: send this part's picks to the wrong spot so they fail",
+    )
+    parser.add_argument(
+        "--fail-offset", type=float, default=0.08,
+        help="how far off (metres, +y) --fail-part's picks go (default: 0.08)",
+    )
     args = parser.parse_args()
 
-    run_bridge(prefer_gl=args.gl, scene_path=args.scene, arm=args.arm)
+    run_bridge(
+        prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,
+        fault_part=PART_NAMES[args.fail_part] if args.fail_part else None,
+        fault_offset=args.fail_offset,
+    )
 
 
 if __name__ == "__main__":

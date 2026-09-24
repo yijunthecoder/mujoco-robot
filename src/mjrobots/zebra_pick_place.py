@@ -41,6 +41,9 @@ _BRICK_CENTER_OFFSET_Z = -0.0192
 BRICK_HEIGHT = 0.0384
 _TABLE_PLACE_XYZ = np.array([0.4148, 0.0, -0.1216])  # target_site, table height
 _HOVER_DZ = 0.10  # scanned reachable across the whole grasp/place workspace
+# Grip point further than this from the brick's center after closing = missed.
+# Half the brick's narrow side (3.4 cm): anything more and the jaws aren't on it.
+_GRASP_TOLERANCE = 0.017
 
 
 class ZebraArmContext:
@@ -82,6 +85,13 @@ class ZebraArmContext:
             keep_grasp_offset=True,
         )
 
+    def grip_miss(self) -> float:
+        """Distance between the gripper's grasp point and the brick's center."""
+        xmat = self.data.xmat[self.body_id].reshape(3, 3)
+        grip_point = self.data.xpos[self.body_id] + xmat @ HAND_LOCAL_OFFSET
+        brick_center = self.data.xpos[self.brick_id] + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+        return float(np.linalg.norm(grip_point - brick_center))
+
     def go(self, render, clock, target, carry_fn=None):
         move_to_point(
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
@@ -113,6 +123,16 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     ctx.go_oriented(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, center_xyz)
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
+
+    # The carry would snap the brick to the fingers from any distance, so check
+    # the fingers actually closed on it first - otherwise a wrong target still
+    # "succeeds" with the brick floating beside the gripper.
+    miss = ctx.grip_miss()
+    if miss > _GRASP_TOLERANCE:
+        _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 100)
+        ctx.go(render, clock, hover_xyz)
+        raise RuntimeError(f"missed the brick: gripper closed {miss * 100:.1f} cm from it")
+
     ctx.carry = ctx.new_carry()
     ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
 
