@@ -44,18 +44,18 @@ namespace zebra_bt
   {
     constexpr double TABLE_X      = 0.4148;
     constexpr double TABLE_Y      = 0.0;
-    constexpr double TABLE_Z      = -0.1026;
-    constexpr double BRICK_HEIGHT = 0.04;
+    constexpr double TABLE_Z      = -0.0842;
+    constexpr double BRICK_HEIGHT = 0.0384;
 
     geometry_msgs::msg::Point p;
     p.x = TABLE_X;
     p.y = TABLE_Y;
 
-    if (part_id == "31111p0e") {          // legs
+    if (part_id == "31111p0e") {          // legs  -> table
       p.z = TABLE_Z;
-    } else if (part_id == "31111p0f") {   // body
+    } else if (part_id == "31111p0f") {   // body  -> +1 brick
       p.z = TABLE_Z + BRICK_HEIGHT;
-    } else if (part_id == "31111p0g") {   // head
+    } else if (part_id == "31111p0g") {   // head  -> +2 bricks
       p.z = TABLE_Z + 2 * BRICK_HEIGHT;
     } else {
       p.z = TABLE_Z;
@@ -254,6 +254,43 @@ public:
 
 private:
   WorldModelPtr wm_;
+};
+
+// ---------------------------------------------------------------------
+// MarkEscalated — used when a part is skipped because the part it depends
+// on was escalated. Sets the skipped part to ESCALATED so allPartsResolved()
+// can finish the loop.
+// ---------------------------------------------------------------------
+class MarkEscalated : public BT::SyncActionNode
+{
+public:
+  MarkEscalated(const std::string & name, const BT::NodeConfig & config,
+                WorldModelPtr wm, RolesMapPtr roles, rclcpp::Logger logger)
+  : BT::SyncActionNode(name, config),
+    wm_(wm), roles_(roles), logger_(logger) {}
+
+  static BT::PortsList providedPorts()
+  { return {BT::InputPort<std::string>("part")}; }
+
+  BT::NodeStatus tick() override
+  {
+    std::string part;
+    getInput("part", part);
+
+    if (wm_->getPartState(part).status != PartStatus::ESCALATED) {
+      wm_->setPartStatus(part, PartStatus::ESCALATED);
+      RCLCPP_WARN(
+        logger_,
+        "[ABORT]   %s: skipped, depends on escalated predecessor",
+        prettyPart(part, roles_).c_str());
+    }
+    return BT::NodeStatus::SUCCESS;
+  }
+
+private:
+  WorldModelPtr wm_;
+  RolesMapPtr roles_;
+  rclcpp::Logger logger_;
 };
 
 // ---------------------------------------------------------------------
@@ -669,6 +706,12 @@ int main(int argc, char ** argv)
   factory.registerBuilder<zebra_bt::IsPartEscalated>("IsPartEscalated",
     [world_model](const std::string & n, const BT::NodeConfig & c) {
       return std::make_unique<zebra_bt::IsPartEscalated>(n, c, world_model); });
+
+  factory.registerBuilder<zebra_bt::MarkEscalated>("MarkEscalated",
+    [world_model, roles, node]
+    (const std::string & n, const BT::NodeConfig & c) {
+      return std::make_unique<zebra_bt::MarkEscalated>(
+        n, c, world_model, roles, node->get_logger()); });
 
   factory.registerBuilder<zebra_bt::LocatePart>("LocatePart",
     [world_model, recovery_manager, roles, node]
