@@ -46,6 +46,35 @@ ARM_JOINTS = {
     "right": [f"right_joint{i}" for i in range(1, 7)],
 }
 
+# Safety limits on IK results, for moving to the real arm. A solve that ends
+# further than these from its target did not converge (e.g. an unreachable
+# orientation, where every joint pins to a limit), so the move is refused
+# rather than sent. A zebra build's solves all land within 0.1 mm / 0.0001 rad.
+IK_MAX_POS_ERR = 0.005  # m
+IK_MAX_ROT_ERR = 0.05  # rad, ~3 deg
+# IK solutions stay this far inside each joint's range, never on the hard
+# limit itself (the zebra build's closest approach is 0.25 rad).
+JOINT_LIMIT_MARGIN = 0.1  # rad
+# Largest joint change allowed from one waypoint to the next, each of which
+# gets ~0.04 s - so also a joint speed limit (~5 rad/s). Mid-path, a bigger
+# jump means IK flipped to a different arm configuration and the move is
+# refused; the lead-in from the arm's current pose is split into steps this
+# size instead (see `_plan_path`). The zebra build's mid-path largest is ~0.11.
+MAX_WAYPOINT_JUMP = 0.2  # rad
+
+
+class IKError(RuntimeError):
+    """IK could not produce a safe joint target; the arm was not moved."""
+
+
+def _limits_with_margin(model, joint_ids):
+    """Joint ranges shrunk by JOINT_LIMIT_MARGIN on each side (less for a
+    range too narrow to spare the full margin)."""
+    lo = model.jnt_range[joint_ids, 0]
+    hi = model.jnt_range[joint_ids, 1]
+    margin = np.minimum(JOINT_LIMIT_MARGIN, 0.25 * (hi - lo))
+    return lo + margin, hi - margin
+
 
 def _hand_point_and_jac(model, data, body_id, local_offset):
     """World position of the point rigidly attached to body_id at
@@ -56,6 +85,49 @@ def _hand_point_and_jac(model, data, body_id, local_offset):
     jacr = np.zeros((3, model.nv))
     mujoco.mj_jac(model, data, jacp, jacr, point, body_id)
     return point, jacp
+
+
+def _rot_err(model, data, body_id, target_quat):
+    """World-frame rotation vector taking body_id's current orientation to
+    target_quat."""
+    neg_cur = np.empty(4)
+    mujoco.mju_negQuat(neg_cur, data.xquat[body_id])
+    err_quat = np.empty(4)
+    mujoco.mju_mulQuat(err_quat, target_quat, neg_cur)
+    rot_err = np.empty(3)
+    mujoco.mju_quat2Vel(rot_err, err_quat, 1.0)
+    return rot_err
+
+
+def _plan_path(q_start, solve, targets, what: str) -> list[np.ndarray]:
+    """Solve every waypoint of a move up front and check it, so a bad
+    waypoint raises IKError before the arm has moved at all.
+
+    `solve(target, q_init)` returns one waypoint's joint angles. Each solve
+    is seeded with the previous solution. Getting from the arm's current
+    pose to the first waypoint may take a big joint change (e.g. turning
+    the wrist into the grip orientation); that stretch is split into
+    joint-space steps of at most MAX_WAYPOINT_JUMP, so it just takes longer.
+    Past the first waypoint, consecutive solutions must stay within
+    MAX_WAYPOINT_JUMP of each other - a bigger jump means IK flipped to a
+    different arm configuration mid-path, so the move is refused.
+    """
+    path = []
+    q_prev = np.asarray(q_start, dtype=float)
+    for i, target in enumerate(targets):
+        q = solve(target, q_prev)
+        jump = float(np.abs(q - q_prev).max())
+        if i == 0:
+            n = int(np.ceil(jump / MAX_WAYPOINT_JUMP))
+            path.extend(q_prev + (k / n) * (q - q_prev) for k in range(1, n))
+        elif jump > MAX_WAYPOINT_JUMP:
+            raise IKError(
+                f"{what}: IK solution jumps {jump:.2f} rad at waypoint {i + 1}/{len(targets)} "
+                f"(limit {MAX_WAYPOINT_JUMP} rad) - arm not moved"
+            )
+        path.append(q)
+        q_prev = q
+    return path
 
 
 def solve_ik(
@@ -69,24 +141,28 @@ def solve_ik(
     damping: float = 0.1,
     tol: float = 1e-4,
     max_step: float = 0.2,
+    q_init: np.ndarray | None = None,
 ) -> np.ndarray:
     """Damped-least-squares IK for a point rigidly attached to body_id.
 
     Solves for the angles of `joint_ids` (each assumed 1-dof) that bring the
     point at `local_offset` in body_id's local frame to `target_pos` in
-    world space. Starts from data's current joint angles (so calling this
-    repeatedly with a slowly-moving target warm-starts each solve from the
-    last one) and operates on a scratch copy of qpos/qvel - the real
-    simulation state is restored before returning.
+    world space. Starts from `q_init` if given, else data's current joint
+    angles (so solving a path waypoint by waypoint, each seeded with the
+    last solution, warm-starts every solve), and operates on a scratch copy
+    of qpos/qvel - the real simulation state is restored before returning.
+
+    Joints are kept JOINT_LIMIT_MARGIN inside their ranges, and IKError is
+    raised if the result still ends more than IK_MAX_POS_ERR from the
+    target (unreachable), so a failed solve is never returned as a target.
     """
     qpos_adr = model.jnt_qposadr[joint_ids]
     dof_adr = model.jnt_dofadr[joint_ids]
-    lo = model.jnt_range[joint_ids, 0]
-    hi = model.jnt_range[joint_ids, 1]
+    lo, hi = _limits_with_margin(model, joint_ids)
 
     qpos_save = data.qpos.copy()
     qvel_save = data.qvel.copy()
-    q = data.qpos[qpos_adr].copy()
+    q = np.clip(data.qpos[qpos_adr] if q_init is None else q_init, lo, hi)
 
     try:
         for _ in range(iters):
@@ -103,11 +179,21 @@ def solve_ik(
             dq = J.T @ np.linalg.solve(JJt + damping**2 * np.eye(3), err)
             dq = np.clip(dq, -max_step, max_step)
             q = np.clip(q + dq, lo, hi)
+
+        data.qpos[qpos_adr] = q
+        mujoco.mj_kinematics(model, data)
+        point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
+        pos_err = float(np.linalg.norm(target_pos - point))
     finally:
         data.qpos[:] = qpos_save
         data.qvel[:] = qvel_save
         mujoco.mj_kinematics(model, data)
 
+    if pos_err > IK_MAX_POS_ERR:
+        raise IKError(
+            f"IK could not reach {np.round(target_pos, 4)}: best solution is "
+            f"{pos_err * 100:.1f} cm away - arm not moved"
+        )
     return q
 
 
@@ -123,6 +209,7 @@ def solve_ik_pose(
     damping: float = 0.1,
     tol: float = 1e-4,
     max_step: float = 0.15,
+    q_init: np.ndarray | None = None,
 ) -> np.ndarray:
     """Damped-least-squares IK for a point AND orientation, both attached to
     body_id - unlike `solve_ik`, which only constrains position.
@@ -142,16 +229,17 @@ def solve_ik_pose(
 
     Like `solve_ik`, works on a scratch copy of qpos/qvel and restores the
     real simulation state before returning - otherwise the arm would be left
-    teleported to the solution before the actuators ever drove it there.
+    teleported to the solution before the actuators ever drove it there -
+    keeps joints off their limits, and raises IKError if the result misses
+    the target by more than IK_MAX_POS_ERR / IK_MAX_ROT_ERR.
     """
     qpos_adr = model.jnt_qposadr[joint_ids]
     dof_adr = model.jnt_dofadr[joint_ids]
-    lo = model.jnt_range[joint_ids, 0]
-    hi = model.jnt_range[joint_ids, 1]
+    lo, hi = _limits_with_margin(model, joint_ids)
 
     qpos_save = data.qpos.copy()
     qvel_save = data.qvel.copy()
-    q = data.qpos[qpos_adr].copy()
+    q = np.clip(data.qpos[qpos_adr] if q_init is None else q_init, lo, hi)
     jacp = np.zeros((3, model.nv))
     jacr = np.zeros((3, model.nv))
     try:
@@ -160,14 +248,7 @@ def solve_ik_pose(
             mujoco.mj_kinematics(model, data)
             point, jacp = _hand_point_and_jac(model, data, body_id, local_offset)
             pos_err = target_pos - point
-
-            cur_quat = data.xquat[body_id]
-            neg_cur = np.empty(4)
-            mujoco.mju_negQuat(neg_cur, cur_quat)
-            err_quat = np.empty(4)
-            mujoco.mju_mulQuat(err_quat, target_quat, neg_cur)
-            rot_err = np.empty(3)
-            mujoco.mju_quat2Vel(rot_err, err_quat, 1.0)
+            rot_err = _rot_err(model, data, body_id, target_quat)
 
             err = np.concatenate([pos_err, rot_err])
             if np.linalg.norm(err) < tol:
@@ -178,11 +259,23 @@ def solve_ik_pose(
             dq = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(6), err)
             dq = np.clip(dq, -max_step, max_step)
             q = np.clip(q + dq, lo, hi)
+
+        data.qpos[qpos_adr] = q
+        mujoco.mj_kinematics(model, data)
+        point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
+        final_pos_err = float(np.linalg.norm(target_pos - point))
+        final_rot_err = float(np.linalg.norm(_rot_err(model, data, body_id, target_quat)))
     finally:
         data.qpos[:] = qpos_save
         data.qvel[:] = qvel_save
         mujoco.mj_kinematics(model, data)
 
+    if final_pos_err > IK_MAX_POS_ERR or final_rot_err > IK_MAX_ROT_ERR:
+        raise IKError(
+            f"IK could not reach {np.round(target_pos, 4)} at the grip orientation: "
+            f"best solution is {final_pos_err * 100:.1f} cm / "
+            f"{np.degrees(final_rot_err):.1f} deg away - arm not moved"
+        )
     return q
 
 
@@ -204,21 +297,37 @@ def move_to_pose(
 ) -> None:
     """Like `move_to_point`, but also holds the gripper at `target_quat`
     throughout - see `solve_ik_pose`. The orientation target is held fixed
-    across all waypoints (only position is interpolated); this is meant for
-    short, single-purpose moves like the final grasp approach, not a long
-    transport where forcing one fixed orientation the whole way may not
-    even be reachable.
+    across all waypoints (only position is interpolated): this arm's
+    reachable orientation is narrow and moves with its position, so
+    interpolating the orientation too leaves waypoints that can't be reached
+    at all (tested: 13 cm / 12 deg off). Turning the wrist into
+    `target_quat` from wherever it starts happens as `_plan_path`'s
+    joint-space lead-in instead. This is meant for short, single-purpose
+    moves like the final grasp approach, not a long transport where forcing
+    one fixed orientation the whole way may not even be reachable.
+
+    The whole path is solved and checked before the arm moves, so an
+    IKError (unreachable waypoint, or an IK configuration flip) leaves the
+    arm where it was.
     """
     mujoco.mj_kinematics(model, data)
     start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
+    targets = [start_point + (i / waypoints) * (target_pos - start_point) for i in range(1, waypoints + 1)]
+    path = _plan_path(
+        data.qpos[model.jnt_qposadr[joint_ids]],
+        lambda wp, q_init: solve_ik_pose(
+            model, data, body_id, local_offset, joint_ids, wp, target_quat, q_init=q_init
+        ),
+        targets,
+        f"move to {np.round(target_pos, 4)}",
+    )
+    _follow_path(model, data, render, clock, arm_ctrl_slice, path, max(1, steps // waypoints), settle_steps, carry)
 
-    steps_per_wp = max(1, steps // waypoints)
-    q = data.qpos[model.jnt_qposadr[joint_ids]].copy()
-    for i in range(1, waypoints + 1):
-        alpha = i / waypoints
-        wp_target = start_point + alpha * (target_pos - start_point)
-        q = solve_ik_pose(model, data, body_id, local_offset, joint_ids, wp_target, target_quat)
 
+def _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp, settle_steps, carry) -> None:
+    """Ramp `data.ctrl` through each joint-space waypoint of `path` in turn,
+    `steps_per_wp` physics steps each, then hold the last for `settle_steps`."""
+    for q in path:
         ctrl_start = data.ctrl[arm_ctrl_slice].copy()
         for s in range(steps_per_wp):
             a = (s + 1) / steps_per_wp
@@ -230,7 +339,7 @@ def move_to_pose(
                 clock.tick()
                 render.step()
 
-    data.ctrl[arm_ctrl_slice] = q
+    data.ctrl[arm_ctrl_slice] = path[-1]
     for _ in range(settle_steps):
         mujoco.mj_step(model, data)
         if carry is not None:
@@ -259,11 +368,15 @@ def move_to_point(
 
     Interpolates `waypoints` points on the straight line from the hand's
     current position to the target, solves IK at each (warm-started from
-    wherever the arm physically is by that point), and ramps `data.ctrl`
-    toward each solution in turn while stepping physics - so motion stays
-    smooth (PD-servoed, not teleported) and the hand's own path stays close
-    to a straight line rather than whatever a single joint-space ramp would
+    the previous waypoint's solution), and ramps `data.ctrl` toward each
+    solution in turn while stepping physics - so motion stays smooth
+    (PD-servoed, not teleported) and the hand's own path stays close to a
+    straight line rather than whatever a single joint-space ramp would
     trace out.
+
+    The whole path is solved and checked before the arm moves, so an
+    IKError (unreachable waypoint, or a jump over MAX_WAYPOINT_JUMP) leaves
+    the arm where it was.
 
     The PD servos lag a fast-moving ctrl target, so a few cm of tracking
     error remains right after the last waypoint; `settle_steps` holds ctrl
@@ -277,32 +390,14 @@ def move_to_point(
     mujoco.mj_kinematics(model, data)
     start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
 
-    steps_per_wp = max(1, steps // waypoints)
-    q = data.qpos[model.jnt_qposadr[joint_ids]].copy()
-    for i in range(1, waypoints + 1):
-        alpha = i / waypoints
-        wp_target = start_point + alpha * (target_pos - start_point)
-        q = solve_ik(model, data, body_id, local_offset, joint_ids, wp_target)
-
-        ctrl_start = data.ctrl[arm_ctrl_slice].copy()
-        for s in range(steps_per_wp):
-            a = (s + 1) / steps_per_wp
-            data.ctrl[arm_ctrl_slice] = ctrl_start + a * (q - ctrl_start)
-            mujoco.mj_step(model, data)
-            if carry is not None:
-                carry()
-            if render is not None:
-                clock.tick()
-                render.step()
-
-    data.ctrl[arm_ctrl_slice] = q
-    for _ in range(settle_steps):
-        mujoco.mj_step(model, data)
-        if carry is not None:
-            carry()
-        if render is not None:
-            clock.tick()
-            render.step()
+    targets = [start_point + (i / waypoints) * (target_pos - start_point) for i in range(1, waypoints + 1)]
+    path = _plan_path(
+        data.qpos[model.jnt_qposadr[joint_ids]],
+        lambda wp, q_init: solve_ik(model, data, body_id, local_offset, joint_ids, wp, q_init=q_init),
+        targets,
+        f"move to {np.round(target_pos, 4)}",
+    )
+    _follow_path(model, data, render, clock, arm_ctrl_slice, path, max(1, steps // waypoints), settle_steps, carry)
 
 
 def run_demo(

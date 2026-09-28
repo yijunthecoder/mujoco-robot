@@ -117,9 +117,13 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     around something. Forcing this same orientation over a *long* reach
     doesn't work either (tested: every joint pins to its limit, ~1m position
     error, since the reachable orientation rotates with the arm's own swing
-    angle) - it's used only for this short grasp-approach range.
+    angle) - it's used only for this short grasp-approach range. So the arm
+    travels to the hover point position-only, turns its wrist into the grip
+    orientation there (a zero-length oriented move: all lead-in), and only
+    then descends oriented.
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
+    ctx.go(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, center_xyz)
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
