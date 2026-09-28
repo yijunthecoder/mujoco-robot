@@ -139,38 +139,49 @@ def solve_ik_pose(
     a distant swing angle like the place point). Use this only where the
     approach angle actually matters (the grasp itself), not throughout a
     whole transport move.
+
+    Like `solve_ik`, works on a scratch copy of qpos/qvel and restores the
+    real simulation state before returning - otherwise the arm would be left
+    teleported to the solution before the actuators ever drove it there.
     """
     qpos_adr = model.jnt_qposadr[joint_ids]
     dof_adr = model.jnt_dofadr[joint_ids]
     lo = model.jnt_range[joint_ids, 0]
     hi = model.jnt_range[joint_ids, 1]
 
+    qpos_save = data.qpos.copy()
+    qvel_save = data.qvel.copy()
     q = data.qpos[qpos_adr].copy()
     jacp = np.zeros((3, model.nv))
     jacr = np.zeros((3, model.nv))
-    for _ in range(iters):
-        data.qpos[qpos_adr] = q
+    try:
+        for _ in range(iters):
+            data.qpos[qpos_adr] = q
+            mujoco.mj_kinematics(model, data)
+            point, jacp = _hand_point_and_jac(model, data, body_id, local_offset)
+            pos_err = target_pos - point
+
+            cur_quat = data.xquat[body_id]
+            neg_cur = np.empty(4)
+            mujoco.mju_negQuat(neg_cur, cur_quat)
+            err_quat = np.empty(4)
+            mujoco.mju_mulQuat(err_quat, target_quat, neg_cur)
+            rot_err = np.empty(3)
+            mujoco.mju_quat2Vel(rot_err, err_quat, 1.0)
+
+            err = np.concatenate([pos_err, rot_err])
+            if np.linalg.norm(err) < tol:
+                break
+
+            mujoco.mj_jac(model, data, jacp, jacr, point, body_id)
+            J = np.vstack([jacp[:, dof_adr], jacr[:, dof_adr]])
+            dq = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(6), err)
+            dq = np.clip(dq, -max_step, max_step)
+            q = np.clip(q + dq, lo, hi)
+    finally:
+        data.qpos[:] = qpos_save
+        data.qvel[:] = qvel_save
         mujoco.mj_kinematics(model, data)
-        point, jacp = _hand_point_and_jac(model, data, body_id, local_offset)
-        pos_err = target_pos - point
-
-        cur_quat = data.xquat[body_id]
-        neg_cur = np.empty(4)
-        mujoco.mju_negQuat(neg_cur, cur_quat)
-        err_quat = np.empty(4)
-        mujoco.mju_mulQuat(err_quat, target_quat, neg_cur)
-        rot_err = np.empty(3)
-        mujoco.mju_quat2Vel(rot_err, err_quat, 1.0)
-
-        err = np.concatenate([pos_err, rot_err])
-        if np.linalg.norm(err) < tol:
-            break
-
-        mujoco.mj_jac(model, data, jacp, jacr, point, body_id)
-        J = np.vstack([jacp[:, dof_adr], jacr[:, dof_adr]])
-        dq = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(6), err)
-        dq = np.clip(dq, -max_step, max_step)
-        q = np.clip(q + dq, lo, hi)
 
     return q
 
