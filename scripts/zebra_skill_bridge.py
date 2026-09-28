@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from mjrobots import move_check
 from mjrobots.zebra_skill_bridge import run_bridge
 
 PART_NAMES = {"legs": "31111p0e", "body": "31111p0f", "head": "31111p0g"}
@@ -50,7 +51,13 @@ def main() -> None:
         help="a missed pick also knocks the brick 5 cm away and perception loses it "
              "for 2s, so the tree re-locates instead of retrying",
     )
+    parser.add_argument(
+        "--confirm-moves", choices=move_check.MODES, default="off",
+        help="print each arm move's joint changes and wait for ENTER before it runs: "
+             "'first' move only, 'all' moves, or 'off' (default)",
+    )
     args = parser.parse_args()
+    move_check.set_mode(args.confirm_moves)
 
     run_bridge(
         prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,

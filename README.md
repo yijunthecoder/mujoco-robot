@@ -46,6 +46,17 @@ Use the left arm instead:
 $ bash scripts/run_zebra.sh --arm left
 ```
 
+Confirm before moving (for the first real-robot runs): each arm move prints
+every joint's current angle, target, and change (flagging changes over
+0.5 rad), then waits - ENTER moves, `q` + ENTER refuses the move (the arm
+stays put and the skill reports FAILED). `first` asks only before the first
+move; `all` asks before every move. Answer within zebra_bt's 30 s skill
+timeout.
+
+```bash
+$ bash scripts/run_zebra.sh --confirm-moves first
+```
+
 ### Fail tests (Victor's retry / escalate behaviour)
 
 `--fail-part` sends every pick of that part 8 cm to the side of the real

@@ -35,6 +35,7 @@ from __future__ import annotations
 import numpy as np
 import mujoco
 
+from . import move_check
 from .pick_place import _RealtimeClock, _ThrottledSync
 
 # Local-frame offset from "<side>_linkgripper" to the fingertip midpoint,
@@ -313,15 +314,27 @@ def move_to_pose(
     mujoco.mj_kinematics(model, data)
     start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
     targets = [start_point + (i / waypoints) * (target_pos - start_point) for i in range(1, waypoints + 1)]
+    q_start = data.qpos[model.jnt_qposadr[joint_ids]].copy()
+    what = f"oriented move to {np.round(target_pos, 4)}"
     path = _plan_path(
-        data.qpos[model.jnt_qposadr[joint_ids]],
+        q_start,
         lambda wp, q_init: solve_ik_pose(
             model, data, body_id, local_offset, joint_ids, wp, target_quat, q_init=q_init
         ),
         targets,
-        f"move to {np.round(target_pos, 4)}",
+        what,
     )
-    _follow_path(model, data, render, clock, arm_ctrl_slice, path, max(1, steps // waypoints), settle_steps, carry)
+    _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
+                        max(1, steps // waypoints), settle_steps, carry)
+
+
+def _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
+                        steps_per_wp, settle_steps, carry) -> None:
+    """Pass a planned path through `move_check.confirm` (a no-op unless
+    confirm-before-moving is switched on), then execute it."""
+    duration_s = (len(path) * steps_per_wp + settle_steps) * model.opt.timestep
+    move_check.confirm(what, q_start, path, duration_s, render)
+    _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp, settle_steps, carry)
 
 
 def _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp, settle_steps, carry) -> None:
@@ -391,13 +404,16 @@ def move_to_point(
     start_point, _ = _hand_point_and_jac(model, data, body_id, local_offset)
 
     targets = [start_point + (i / waypoints) * (target_pos - start_point) for i in range(1, waypoints + 1)]
+    q_start = data.qpos[model.jnt_qposadr[joint_ids]].copy()
+    what = f"move to {np.round(target_pos, 4)}"
     path = _plan_path(
-        data.qpos[model.jnt_qposadr[joint_ids]],
+        q_start,
         lambda wp, q_init: solve_ik(model, data, body_id, local_offset, joint_ids, wp, q_init=q_init),
         targets,
-        f"move to {np.round(target_pos, 4)}",
+        what,
     )
-    _follow_path(model, data, render, clock, arm_ctrl_slice, path, max(1, steps // waypoints), settle_steps, carry)
+    _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
+                        max(1, steps // waypoints), settle_steps, carry)
 
 
 def run_demo(

@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from mjrobots import move_check
 from mjrobots.zebra_pick_place import run_demo
 
 
@@ -23,7 +24,13 @@ def main() -> None:
     parser.add_argument("--gl", default="egl", help="preferred rendering backend (default: egl)")
     parser.add_argument("--scene", default=None, help="path to stationlite_pick_place.xml")
     parser.add_argument("--arm", choices=["left", "right"], default="right", help="which arm to move")
+    parser.add_argument(
+        "--confirm-moves", choices=move_check.MODES, default="off",
+        help="print each arm move's joint changes and wait for ENTER before it runs: "
+             "'first' move only, 'all' moves, or 'off' (default)",
+    )
     args = parser.parse_args()
+    move_check.set_mode(args.confirm_moves)
 
     run_demo(prefer_gl=args.gl, scene_path=args.scene, arm=args.arm)
 
