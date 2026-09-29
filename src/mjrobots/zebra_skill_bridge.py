@@ -134,6 +134,10 @@ class ZebraSkillBridge(Node):
 # retried pick sees LOST.
 _BUMP = np.array([0.05, 0.0, 0.0])
 _BUMP_LOST_S = 2.0
+# knock_placed: how far a just-placed brick gets knocked (world frame) - off
+# the stack, far enough from it (4.8 cm gap) for a finger to fit between them
+# when the tree re-picks it.
+_KNOCK = np.array([0.0, -0.08, 0.0])
 
 
 def _bump_brick(model, data, brick_id: int, delta: np.ndarray) -> None:
@@ -168,8 +172,14 @@ def run_bridge(
     fault_offset: float = 0.08,
     fault_times: int = 0,
     fault_bump: bool = False,
+    knock_placed: str | None = None,
 ) -> None:
-    """`fault_part` (a part id) is a test hook: picks of that part are sent
+    """`knock_placed` (a part id) is a test hook: the first time that part is
+    placed, it's knocked `_KNOCK` off the stack right after the gripper lets
+    go - so the place check sees it missing and reports FAILED, and zebra_bt
+    re-locates, re-picks and re-places it.
+
+    `fault_part` (a part id) is a test hook: picks of that part are sent
     `fault_offset` metres off to the side (world +y), so the gripper closes on
     air and the pick is reported FAILED - exercises zebra_bt's retry/escalate.
     `fault_times` > 0 limits it to that part's first N picks (0 = every pick).
@@ -284,7 +294,30 @@ def run_bridge(
                         )
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
-                        place_part(ctx, render, clock, center_xyz)  # Victor's stack position for this part
+                        # Victor's stack position for this part; then look at where it landed
+                        def _verify() -> tuple[np.ndarray, float] | None:
+                            nonlocal knock_placed
+                            if part_id == knock_placed:
+                                knock_placed = None  # first place only
+                                _bump_brick(model, data, ctx.brick_id, _KNOCK)
+                                for _ in range(250):  # let it land
+                                    sim_step.step(model, data)
+                                    render.step()
+                                node.get_logger().warn(
+                                    f"FAULT INJECTION: knocked placed {part_id} "
+                                    f"{np.linalg.norm(_KNOCK) * 100:.0f} cm off the stack"
+                                )
+                            return _relook(part_id)
+
+                        place_part(ctx, render, clock, center_xyz, verify=_verify)
+                        node.get_logger().info(
+                            f"placed {part_id} (" + (
+                                "not visible from hover, landing unchecked" if ctx.place_error is None
+                                else f"checked with {relook_camera.get(part_id)}: {ctx.place_error[0] * 100:.1f} cm "
+                                     f"to the side, {ctx.place_error[1] * 100:+.1f} cm up/down, "
+                                     f"{np.degrees(ctx.place_error[2]):.0f} deg from square"
+                            ) + ")"
+                        )
                         if ctx.placed_flipped:
                             node.get_logger().warn(
                                 f"placed {part_id} turned 180 deg (square grip out of reach at the stack): "
@@ -299,8 +332,10 @@ def run_bridge(
                     node.report(command_id, "SUCCEEDED")
                 except Exception as exc:  # report failure to the BT rather than crashing the bridge
                     node.get_logger().error(f"{skill} {command_id} failed: {exc}")
-                    if skill == "pick":
-                        perception.status_override[part_id] = None
+                    # Not held (failed pick) or let go somewhere wrong (failed place):
+                    # either way report where perception actually sees it again, so
+                    # the tree can re-locate and re-pick it.
+                    perception.status_override[part_id] = None
                     node.report(command_id, "FAILED", str(exc))
                     if faulted and fault_bump:
                         _bump_brick(model, data, ctx.brick_id, _BUMP)

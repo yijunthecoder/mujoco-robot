@@ -52,6 +52,11 @@ def main() -> None:
              "for 2s, so the tree re-locates instead of retrying",
     )
     parser.add_argument(
+        "--knock-placed", choices=sorted(PART_NAMES), default=None,
+        help="test hook: knock this part 8 cm off the stack right after its first place, "
+             "so the place check fails it and the tree re-picks and re-places it",
+    )
+    parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
              "'first' move only, 'all' moves, or 'off' (default)",
@@ -65,6 +70,7 @@ def main() -> None:
         fault_offset=args.fail_offset,
         fault_times=args.fail_times,
         fault_bump=args.fail_bump,
+        knock_placed=PART_NAMES[args.knock_placed] if args.knock_placed else None,
     )
 
 

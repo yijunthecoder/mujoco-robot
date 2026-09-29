@@ -68,6 +68,13 @@ _MAX_RELOOK_SHIFT = 0.04
 # held brick out of the fingers on the up-to-90 deg turn back to square at
 # the stack (4 of 5 test cases dropped at 5 rad/s, 1 at 2.5, none at 1.2).
 _HELD_LEAD_IN_STEP = 0.03
+# place_part's check of where the brick ended up (its `verify`): further than
+# this from the target sideways, up/down (e.g. it fell off the stack), or
+# turned from square, and the place fails. Good placements land 0.2-1.3 cm
+# off, level, within ~1 deg.
+_PLACE_TOL_XY = 0.02  # m
+_PLACE_TOL_Z = 0.015  # m
+_PLACE_TOL_YAW = np.radians(10.0)
 
 
 class ZebraArmContext:
@@ -108,6 +115,9 @@ class ZebraArmContext:
         self.holding = False
         # Every move is checked against the other arm before it runs.
         self.clearance = ArmClearance(model, arm)
+        # How far the last placed brick was seen from its target: (xy, z, yaw)
+        # in m/m/rad, or None if there was no check or nothing saw it.
+        self.place_error: tuple[float, float, float] | None = None
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -292,7 +302,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
     ctx.go(render, clock, hover_xyz)
 
 
-def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
+def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None) -> None:
     """Carry the gripped brick to `center_xyz` (geometric center), set it
     down, and let go - no teleport: where the brick ends up is where physics
     leaves it when the fingers open.
@@ -310,6 +320,13 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     (the arm's grip turn is narrower at the stack), the brick goes down
     turned 180 deg instead - same footprint, studs still line up, only the
     printed face reversed (`ctx.placed_flipped`).
+
+    `verify`, if given, looks at the brick once the arm has let go and backed
+    up to hover - the same kind of function as grasp_part's `relook`,
+    returning `(center, yaw)` or None. If the brick isn't where it should be
+    (see `_PLACE_TOL_*`: slid, fell off the stack, knocked round), the place
+    fails with what's wrong, so the caller can find and re-pick it. None
+    (nothing saw it) passes unchecked (`ctx.place_error` stays None).
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
     ctx.go(render, clock, hover_xyz)
@@ -318,6 +335,24 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
     ctx.holding = False
     ctx.go(render, clock, hover_xyz)
+
+    # Check where the brick actually ended up, from the hover point.
+    ctx.place_error = None
+    look = verify() if verify is not None else None
+    if look is not None:
+        seen, seen_yaw = look
+        off = np.asarray(seen, dtype=float) - center_xyz
+        yaw_off = abs(_wrap(2 * seen_yaw) / 2) if seen_yaw is not None else 0.0  # from square, mod 180 deg
+        ctx.place_error = (float(np.linalg.norm(off[:2])), float(off[2]), float(yaw_off))
+        problems = []
+        if np.linalg.norm(off[:2]) > _PLACE_TOL_XY:
+            problems.append(f"{np.linalg.norm(off[:2]) * 100:.1f} cm to the side")
+        if abs(off[2]) > _PLACE_TOL_Z:
+            problems.append(f"{off[2] * 100:+.1f} cm {'above' if off[2] > 0 else 'below'} the target")
+        if yaw_off > _PLACE_TOL_YAW:
+            problems.append(f"turned {np.degrees(yaw_off):.0f} deg")
+        if problems:
+            raise RuntimeError(f"placed brick didn't stay put: it's {', '.join(problems)}")
 
 
 def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "right") -> None:

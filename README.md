@@ -126,6 +126,18 @@ $ bash scripts/run_zebra.sh --fail-part body --fail-times 1 --fail-bump
 ```
 → `3 placed, 0 escalated` (~62s)
 
+Knock a placed brick off the stack: `--knock-placed PART` knocks that part
+8 cm sideways right after its first place. The bridge looks at every brick
+it places before reporting success, so this place is reported `FAILED`
+("placed brick didn't stay put: it's 8.2 cm to the side, -3.9 cm below the
+target"), the tree re-locates it, and it is re-picked from where it fell and
+placed again:
+
+```bash
+$ bash scripts/run_zebra.sh --knock-placed body
+```
+→ `3 placed, 0 escalated`, body picked and placed twice
+
 No perception at all: run only the tree, without the bridge. The legs are
 never found; after 3 searches of 10s each they escalate, and body and head
 are skipped:
