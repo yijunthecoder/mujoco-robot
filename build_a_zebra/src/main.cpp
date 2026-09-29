@@ -1,12 +1,12 @@
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <functional>
-#include <iomanip>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <mutex>
+#include <chrono>     // Tick (std::chrono::milliseconds)
+#include <cstdio>     // printf
+#include <cstdlib>    // Tells ROS 2 the format before initalising (setenv())
+#include <functional> // Connect my callback function to the listener, so it can call when something happen (std::bind)
+#include <iomanip>    // Aliging Columns in output (std::setw)
+#include <iostream>   // Output (std::cout)
+#include <map>        // Stores the part_ID and role name
+#include <memory>     // Sharing ownership of objects (std::shared_ptr, std::make_shared)
+#include <mutex>      // Walkey Talkey [Prevent race = first come first change] (std::mutex)
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -16,6 +16,8 @@
 #include "behaviortree_cpp/loggers/abstract_logger.h"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "nav2_msgs/msg/behavior_tree_log.hpp"
+#include "nav2_msgs/msg/behavior_tree_status_change.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -35,27 +37,29 @@ using RolesMapPtr = std::shared_ptr<const std::map<std::string, std::string>>;
 
 namespace zebra_bt
 {
-  // ---------------------------------------------------------------------
-  // Assembly pose: where each part goes when it's placed.
-  // Legs go on the table, body stacks on top of legs, head on top of body.
-  // Tune these to match the physical assembly point in the sim.
-  // ---------------------------------------------------------------------
+  //! ---------------------------------------------------------------------
+  //* Assembly pose: where each part goes when it's placed
+  //* TUNE THESE TO MATCH THE PHYSICAL ASSEMBLY POINT IN THE SIM 
+  //! ---------------------------------------------------------------------
   static geometry_msgs::msg::Point placeTargetFor(const std::string & part_id)
   {
+    //? const: value fixed, may be known at runtime
+    //? constexpr: value must be known at compile time    
     constexpr double TABLE_X      = 0.4148;
     constexpr double TABLE_Y      = 0.0;
     constexpr double TABLE_Z      = -0.0842;
     constexpr double BRICK_HEIGHT = 0.0384;
-
+    // ROS | sub-namespace | X,Y,Z | Var Name
     geometry_msgs::msg::Point p;
     p.x = TABLE_X;
     p.y = TABLE_Y;
 
-    if (part_id == "31111p0e") {          // legs  -> table
+    //? Changing the height according to the brick amount, eg, 2nd brick, table Z-axis + 1 brick height
+    if (part_id == "31111p0e") {          
       p.z = TABLE_Z;
-    } else if (part_id == "31111p0f") {   // body  -> +1 brick
+    } else if (part_id == "31111p0f") { 
       p.z = TABLE_Z + BRICK_HEIGHT;
-    } else if (part_id == "31111p0g") {   // head  -> +2 bricks
+    } else if (part_id == "31111p0g") {
       p.z = TABLE_Z + 2 * BRICK_HEIGHT;
     } else {
       p.z = TABLE_Z;
@@ -63,121 +67,142 @@ namespace zebra_bt
     return p;
   }
 
-// ---------------------------------------------------------------------
-// Human-readable part label: "legs" for "31111p0e".
-// ---------------------------------------------------------------------
-static std::string prettyPart(const std::string & id, const RolesMapPtr & roles)
-{
-  if (roles) {
-    auto it = roles->find(id);
-    if (it != roles->end()) return it->second;
-  }
-  return id;
-}
-
-// ---------------------------------------------------------------------
-// SkillBridge — sends JSON commands, tracks status replies.
-// ---------------------------------------------------------------------
-class SkillBridge
-{
-public:
-  explicit SkillBridge(const rclcpp::Node::SharedPtr & node)
-  : node_(node)
-  {
-    command_pub_ = node_->create_publisher<std_msgs::msg::String>(
-      "/zebra/skill_commands", 10);
-
-    status_sub_ = node_->create_subscription<std_msgs::msg::String>(
-      "/zebra/skill_status", 10,
-      std::bind(&SkillBridge::statusCallback, this, std::placeholders::_1));
-  }
-
-  std::string send(
-    const std::string & skill,
-    const std::string & part,
-    const geometry_msgs::msg::Point & target)
-  {
-    const std::string command_id =
-      "zebra-" + std::to_string(++next_command_id_);
-
-    nlohmann::json payload = {
-      {"command_id", command_id},
-      {"skill", skill},
-      {"part_id", part},
-      {"target", {
-        {"x", target.x},
-        {"y", target.y},
-        {"z", target.z}
-      }}
-    };
-
-    std_msgs::msg::String message;
-    message.data = payload.dump();
-    command_pub_->publish(message);
-    return command_id;
-  }
-
-  std::string status(const std::string & command_id)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it = statuses_.find(command_id);
-    if (it == statuses_.end()) {
-      return "";
+  //! ---------------------------------------------------------------------
+  //* Return readable label [Legs, Body, Head]
+  // Read only function (static)
+  // (reference) & = two names with SAME variable and change together
+  // (Pointer) * = GOes to the address and get the value
+  //! ---------------------------------------------------------------------
+  static std::string prettyPart(const std::string & id, const RolesMapPtr & roles)
+  { 
+    //? Key (First)| Value (Second)
+    //? 31111p0e   | Legs 
+    if (roles) {
+      auto it = roles->find(id);  //* Already known id type (string)
+      if (it != roles->end()) return it->second;
     }
-    return it->second;
+    return id;
   }
 
-private:
-  void statusCallback(const std_msgs::msg::String::SharedPtr message)
+  //! ---------------------------------------------------------------------
+  //* SkillBridge — sends JSON commands, tracks status replies.
+  //  explicit = Prevent it from sliently converting
+  //! ---------------------------------------------------------------------
+  class SkillBridge
   {
-    try {
-      const auto payload = nlohmann::json::parse(message->data);
+  public:
+    explicit SkillBridge(const rclcpp::Node::SharedPtr & node)
+        : node_(node)   //? save the node (1 step, before body runs)
+    {
+        //? Publisher: sends String messages on /zebra/skill_commands (10 messages)
+        command_pub_ = node_->create_publisher<std_msgs::msg::String>("/zebra/skill_commands", 10);
+
+        //? Subscriber: listens on /zebra/skill_status (queue 10)
+        status_sub_ = node_->create_subscription<std_msgs::msg::String>("/zebra/skill_status", 10,
+
+        //? Create a callable for ROS, glue statusCallback to this
+        //? _1 is for incoming messages
+        std::bind(&SkillBridge::statusCallback, this, std::placeholders::_1));
+    }
+
+    // Input + Return (Signature)
+    std::string send(
+      const std::string & skill,
+      const std::string & part,
+      const geometry_msgs::msg::Point & target)
+    {
       const std::string command_id =
-        payload.at("command_id").get<std::string>();
-      const std::string execution_status =
-        payload.at("status").get<std::string>();
+        "zebra-" + std::to_string(++next_command_id_);
+      // Messages
+      nlohmann::json payload = {
+        {"command_id", command_id},
+        {"skill", skill},
+        {"part_id", part},
+        {"target", {
+          {"x", target.x},
+          {"y", target.y},
+          {"z", target.z}
+        }}
+      };
 
-      std::lock_guard<std::mutex> lock(mutex_);
-      statuses_[command_id] = execution_status;
-    } catch (const std::exception &) {
-      // Ignore malformed status messages.
+      std_msgs::msg::String message;
+      message.data = payload.dump();    //? Json -> String
+      command_pub_->publish(message);
+      return command_id;
     }
-  }
+    
+    //! MUTEX MAKE SURE ONLY 1 FUNCTION CAN TOUCH statuses_ AT A TIME [status() & statusCallback()] 
+    std::string status(const std::string & command_id) //* Read from map (statuses_)
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto it = statuses_.find(command_id);
+      if (it == statuses_.end()) {
+        return "";
+      }
+      return it->second;
+      //! READ STATUS
+      //? command_id    | status
+      //? zebra_bt_node | Done / Failed <--- READ
+    }
 
-  rclcpp::Node::SharedPtr node_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr command_pub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr status_sub_;
+    private:
+      void statusCallback(const std_msgs::msg::String::SharedPtr message) //* Write to the map (statuses_)
+      {
+        try {
+          const auto payload = nlohmann::json::parse(message->data);
+          const std::string command_id =
+            payload.at("command_id").get<std::string>();
+          const std::string execution_status =
+            payload.at("status").get<std::string>();
+          //! WRITE NEW ROW
+          //? command_id      | status
+          //? zebra_bt_node_1 | Done
+          //? zebra_bt_node_2 | Failed <--- NEW
 
-  std::mutex mutex_;
-  std::unordered_map<std::string, std::string> statuses_;
-  unsigned long next_command_id_{0};
-};
+          std::lock_guard<std::mutex> lock(mutex_);
+          statuses_[command_id] = execution_status;
+        } catch (const std::exception &) {
+          // Ignore malformed status messages.
+          // catch [Safety Net], try [do stuff might fail]
+        }
+      }
+    //? Declaring MEMBER variables (Var inside a class = member)
+    //? ROS objects (set up in the constructor)
+    rclcpp::Node::SharedPtr node_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr command_pub_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr status_sub_;
 
-using SkillBridgePtr = std::shared_ptr<SkillBridge>;
+    //? State (protects + stores + counts)
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::string> statuses_;
+    unsigned long next_command_id_{0};
+  };
 
-// ---------------------------------------------------------------------
-// QuietLogger — prints only RUNNING -> SUCCESS/FAILURE transitions.
-// ---------------------------------------------------------------------
-class QuietLogger : public BT::StatusChangeLogger
-{
-public:
-  explicit QuietLogger(BT::TreeNode * root)
-  : BT::StatusChangeLogger(root)
-  {}
+  using SkillBridgePtr = std::shared_ptr<SkillBridge>;
 
-  void callback(
-    BT::Duration,
-    const BT::TreeNode & node,
-    BT::NodeStatus prev,
-    BT::NodeStatus curr) override
+  //! ---------------------------------------------------------------------
+  //* QuietLogger — prints only RUNNING -> SUCCESS/FAILURE transitions.
+  //! ---------------------------------------------------------------------
+  class QuietLogger : public BT::StatusChangeLogger
   {
-    if (prev != BT::NodeStatus::RUNNING) return;
+  public:
+    explicit QuietLogger(BT::TreeNode * root)
+    : BT::StatusChangeLogger(root)
+    {}
 
-    std::cout << "    [BT] " << std::left << std::setw(24)
-              << node.name() << "  "
-              << BT::toStr(prev) << " -> " << BT::toStr(curr)
-              << "\n";
-  }
+    void callback(
+      BT::Duration,
+      const BT::TreeNode & node,
+      BT::NodeStatus prev,
+      BT::NodeStatus curr) override
+    {
+      if (prev != BT::NodeStatus::RUNNING) return;
+
+      std::cout << "    [BT] " << std::left << std::setw(24)
+                << node.name() << "  "
+                << BT::toStr(prev) << " -> " << BT::toStr(curr)
+                << "\n";
+    }
 
   void flush() override {}
 };
@@ -634,6 +659,39 @@ private:
 
 }  // namespace zebra_bt
 
+  class BtRosLogger : public BT::StatusChangeLogger
+  {
+  public:
+    BtRosLogger(rclcpp::Node::SharedPtr node, const BT::Tree & tree)
+    : BT::StatusChangeLogger(tree.rootNode()), node_(node)
+    {
+      pub_ = node_->create_publisher<nav2_msgs::msg::BehaviorTreeLog>(
+        "/behavior_tree_log", 10);
+    }
+
+    void callback(BT::Duration, const BT::TreeNode & node,
+                  BT::NodeStatus prev, BT::NodeStatus curr) override
+    {
+      nav2_msgs::msg::BehaviorTreeLog msg;
+      msg.timestamp = node_->now();
+
+      nav2_msgs::msg::BehaviorTreeStatusChange change;
+      change.timestamp = node_->now();
+      change.node_name = node.name();
+      change.previous_status = BT::toStr(prev);
+      change.current_status = BT::toStr(curr);
+      msg.event_log.push_back(change);
+
+      pub_->publish(msg);
+    }
+
+    void flush() override {}
+
+  private:
+    rclcpp::Node::SharedPtr node_;
+    rclcpp::Publisher<nav2_msgs::msg::BehaviorTreeLog>::SharedPtr pub_;
+  };
+
 int main(int argc, char ** argv)
 {
   // Human-readable log format. Must be set BEFORE rclcpp::init —
@@ -742,6 +800,7 @@ int main(int argc, char ** argv)
     "/trees/zebra_tree.xml";
 
   auto tree = factory.createTreeFromFile(tree_file);
+  auto bt_ros_logger = std::make_shared<BtRosLogger>(node, tree);
   zebra_bt::QuietLogger quiet_logger(tree.rootNode());
   quiet_logger.setEnabled(true);
 

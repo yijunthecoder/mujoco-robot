@@ -22,6 +22,7 @@ find_package(std_msgs REQUIRED)            # std_msgs: basic ROS messages such a
 find_package(geometry_msgs REQUIRED)       # geometry_msgs: ROS geometry types, such as a 3D Point.
 find_package(ament_index_cpp REQUIRED)     # ament_index_cpp: lets your code locate installed resource files.
 find_package(behaviortree_cpp REQUIRED)    # behaviortree_cpp: the Behavior Tree library.
+find_package(nav2_msgs REQUIRED)
 
 # Compiling, also search inside the `include/` folder for header files.”
 # Headers (hpp) are stored here
@@ -40,6 +41,7 @@ ament_target_dependencies(zebra_bt_node
   std_msgs                                # Use String messages.
   geometry_msgs                           # Use Point messages.
   ament_index_cpp                         # Locate JSON/XML resources.
+  nav2_msgs
 )
 
 # BehaviorTree.CPP v4 exports this target name on this system:
