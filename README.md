@@ -33,6 +33,9 @@ All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
 terminal. The MuJoCo window opens and the right arm stacks legs -> body ->
 head on the green circle, finishing with `3 placed, 0 escalated` (~55s).
+Victor's tree picks every target: picks where perception last saw the brick,
+places at his stack positions. All positions, perception included, are the
+brick's origin in the MuJoCo world frame (his `INTERFACE.md`, section 2b).
 Output lines are labelled `[tree]` / `[bridge]`; close the MuJoCo window or
 press Ctrl+C to stop both.
 

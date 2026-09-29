@@ -16,6 +16,13 @@ his tree just set - see `ZebraPerceptionPublisher.status_override`).
 This file mirrors that format by hand - it is not generated from his code,
 so if his `perceptionCallback` format changes, this needs updating to match.
 
+FRAME: x,y,z are the brick's ORIGIN in the MuJoCo world frame (robot base),
+per his INTERFACE.md section 2b - the frame his pick/place targets use too.
+Cameras measure in the shared frame (headcam's own, see
+camera_calibration.py); `_report` converts that to world with headcam's
+pose in the world (from the scene here; from the robot's head-camera
+extrinsics on the real robot).
+
 PART NAMING: WorldModel is keyed by whatever part_ids main.cpp passes in from
 TaskModel::buildOrder(), which reads them straight from bom.json - the real
 LDraw part ids (31111p0e/f/g), not "head"/"body"/"feet" (checked directly
@@ -142,6 +149,8 @@ class ZebraPerceptionPublisher(Node):
             )
             for pid in self.part_ids
         }
+        # Shared frame (headcam) -> world; headcam is fixed, so once is enough.
+        self.shared_to_world = self.cams[self.part_ids[0]].cam_pose(REFERENCE_CAMERA)
         labels = ", ".join(f"{PART_LABELS[pid]} ({pid})" for pid in self.part_ids)
         self._log(f"ready        {labels} -> {PERCEPTION_TOPIC} every {interval}s")
 
@@ -190,7 +199,8 @@ class ZebraPerceptionPublisher(Node):
         # CameraCalibration.to_reference).
         status = override or "LOCATED"
         camera = REFERENCE_CAMERA if REFERENCE_CAMERA in available else available[0]
-        x, y, z = self.calibration.to_reference(camera, seen[camera], self.cams[pid])
+        shared = self.calibration.to_reference(camera, seen[camera], self.cams[pid])
+        x, y, z = self.shared_to_world.apply(shared)  # world frame - see module docstring
         self._publish(
             f"{pid},{status},{x:.4f},{y:.4f},{z:.4f}",
             f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}",
