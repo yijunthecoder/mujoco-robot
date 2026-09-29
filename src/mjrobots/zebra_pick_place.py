@@ -48,6 +48,11 @@ BRICK_WIDTH = 0.032
 # BRICK_WIDTH. Measured: fingers stop at 3.13-3.14 cm on a brick, and close
 # to 0.00 cm on air - nothing lands in between.
 _GRIP_WIDTH_TOL = 0.005
+# The look again from hover (grasp_part's `relook`) corrects the aim by up to
+# this much (horizontally). Further than that, the first estimate was badly
+# wrong or the brick moved: the pick fails so the caller re-locates it. The
+# closing jaws already center a brick up to ~3 cm off by themselves.
+_MAX_RELOOK_SHIFT = 0.04
 
 
 class ZebraArmContext:
@@ -71,6 +76,9 @@ class ZebraArmContext:
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{arm}_gripper_joint{i}") for i in (1, 2)
         ]
         self.grasp_width: float | None = None  # finger gap at the last grasp check
+        # How far the last look again from hover moved the aim (m), or None
+        # if there was no look or it couldn't see the brick.
+        self.relook_shift: float | None = None
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -128,10 +136,18 @@ def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int 
         last = width
 
 
-def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
+def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> None:
     """Approach, descend onto, and grip the brick at `center_xyz` (its
     geometric center, not its body origin - see `_BRICK_CENTER_OFFSET_Z`),
     then lift it clear of the table.
+
+    `relook`, if given, is called once the arm is hovering over the brick,
+    before it descends: a no-argument function returning a fresh estimate of
+    the brick's center (world frame), or None if it can't see the brick. The
+    descent then aims at the fresh estimate - a closer, later look than the
+    one `center_xyz` came from, so it catches perception error and a brick
+    that has moved since. A shift over `_MAX_RELOOK_SHIFT` fails the pick
+    instead (the arm stays at hover); None keeps the original aim.
 
     Uses `move_to_pose` (fixed grip orientation - `ctx.grip_quat`, found once
     at a known-good pose) for the approach/descend/lift, not position-only
@@ -153,6 +169,21 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
     ctx.go(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, hover_xyz)
+
+    ctx.relook_shift = None
+    seen = relook() if relook is not None else None
+    if seen is not None:
+        shift = np.asarray(seen, dtype=float) - center_xyz
+        ctx.relook_shift = float(np.linalg.norm(shift))
+        if np.linalg.norm(shift[:2]) > _MAX_RELOOK_SHIFT:
+            raise RuntimeError(
+                f"brick is {np.linalg.norm(shift[:2]) * 100:.1f} cm from where the pick was aimed "
+                f"(looked again from hover) - re-locate it"
+            )
+        center_xyz = center_xyz + shift
+        hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
+        ctx.go_oriented(render, clock, hover_xyz)
+
     ctx.go_oriented(render, clock, center_xyz)
     _close_and_settle(ctx, render, clock)
 

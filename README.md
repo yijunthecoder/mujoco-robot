@@ -60,9 +60,12 @@ $ bash scripts/run_zebra.sh --confirm-moves first
 ### Fail tests (Victor's retry / escalate behaviour)
 
 `--fail-part` sends every pick of that part 8 cm to the side of the real
-brick. The gripper closes on nothing, the bridge's grasp check (the fingers
-closed to ~0 cm instead of stopping at the brick's 3.2 cm) reports the pick
-`FAILED`, and the tree retries it. After the 4th failed pick the tree
+brick, and the pick is reported `FAILED` one of two ways. Legs and head:
+the arm looks again from above the (wrong) spot, sees the brick 8 cm away,
+and gives up before descending ("brick is 7.9 cm from where the pick was
+aimed"). Body: the arm hides it from the head camera at that point, so the
+arm descends and the gripper closes on nothing (the fingers close to ~0 cm
+instead of stopping at the brick's 3.2 cm). Either way the tree retries it. After the 4th failed pick the tree
 gives up on that part ("retries exhausted, escalating to human"), and
 anything stacked on top of it is skipped.
 
@@ -88,9 +91,10 @@ $ bash scripts/run_zebra.sh --fail-part head
 → `2 placed, 1 escalated`
 
 Change how far off the pick goes (metres, default `0.08`). Small offsets
-don't miss: the closing fingers push the brick into the middle of the jaws
-and grip it anyway (measured: 3 cm off still grasps, 5 cm misses), as a real
-gripper would:
+don't miss: up to 4 cm the look again from above corrects the aim (legs,
+head), and the closing fingers push the brick into the middle of the jaws
+anyway (measured on the body: 3 cm off still grasps, 5 cm misses), as a
+real gripper would:
 
 ```bash
 $ bash scripts/run_zebra.sh --fail-part body --fail-offset 0.05

@@ -65,6 +65,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from . import sim_step
+from .camera_calibration import REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, ZebraPerceptionPublisher
 from .zebra_pick_place import (
@@ -82,6 +83,8 @@ STATUS_TOPIC = "/zebra/skill_status"
 # Stack level of each part (0 = on the table): the zebra is built bottom-up,
 # legs -> body -> head, same order as bom.json's role_order.
 STACK_LEVEL = {"31111p0e": 0, "31111p0f": 1, "31111p0g": 2}
+# Looks averaged by the look again from hover (see `_relook` in run_bridge).
+_RELOOK_SAMPLES = 10
 
 
 class ZebraSkillBridge(Node):
@@ -221,6 +224,22 @@ def run_bridge(
     executor.add_node(node)
     executor.add_node(perception)
 
+    def _relook(part_id: str) -> np.ndarray | None:
+        """grasp_part's look again from hover: `part_id`'s center in world
+        frame, averaged over _RELOOK_SAMPLES headcam looks - or None if
+        headcam can't see it (under half the looks landed; with the arm at
+        hover it blocks headcam's view of the middle brick, zebra_body, for
+        either arm). headcam only: its frame *is* the shared frame, so its
+        looks need no camera-to-camera conversion. A hand camera, looking
+        straight down from hover, is the natural source once hand-camera
+        positions are trustworthy away from the home pose."""
+        cams = perception.cams[part_id]
+        looks = [p for p in (cams.observe(REFERENCE_CAMERA) for _ in range(_RELOOK_SAMPLES)) if p is not None]
+        if len(looks) < _RELOOK_SAMPLES / 2:
+            return None
+        origin = headcam_R @ np.mean(looks, axis=0) + headcam_t
+        return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
             render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), perception)
@@ -263,10 +282,15 @@ def run_bridge(
 
                 try:
                     if skill == "pick":
-                        grasp_part(ctx, render, clock, center_xyz)
+                        grasp_part(ctx, render, clock, center_xyz, relook=lambda: _relook(part_id))
+                        relooked = (
+                            "brick not visible from hover, kept the original aim"
+                            if ctx.relook_shift is None
+                            else f"looked again from hover, aim moved {ctx.relook_shift * 100:.1f} cm"
+                        )
                         node.get_logger().info(
-                            f"grasped {part_id} (fingers stopped at {ctx.grasp_width * 100:.2f} cm; "
-                            f"sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
+                            f"grasped {part_id} ({relooked}; fingers stopped at "
+                            f"{ctx.grasp_width * 100:.2f} cm; sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
                         )
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
