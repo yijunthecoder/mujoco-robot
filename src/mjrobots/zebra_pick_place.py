@@ -118,6 +118,9 @@ class ZebraArmContext:
         # How far the last placed brick was seen from its target: (xy, z, yaw)
         # in m/m/rad, or None if there was no check or nothing saw it.
         self.place_error: tuple[float, float, float] | None = None
+        # Brick center the last grasp closed on (after any relook correction)
+        # - where put_back sets it down again.
+        self.picked_from: np.ndarray | None = None
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -285,6 +288,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
     grips = sorted({_wrap(brick_yaw), _wrap(brick_yaw + np.pi)}, key=abs)
     grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, grips)
     ctx.held_yaw = _wrap(brick_yaw - grip_yaw)
+    ctx.picked_from = center_xyz.copy()
     _close_and_settle(ctx, render, clock)
 
     width = ctx.grasp_width = ctx.grip_width()
@@ -340,19 +344,42 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None) -> 
     ctx.place_error = None
     look = verify() if verify is not None else None
     if look is not None:
-        seen, seen_yaw = look
-        off = np.asarray(seen, dtype=float) - center_xyz
-        yaw_off = abs(_wrap(2 * seen_yaw) / 2) if seen_yaw is not None else 0.0  # from square, mod 180 deg
-        ctx.place_error = (float(np.linalg.norm(off[:2])), float(off[2]), float(yaw_off))
-        problems = []
-        if np.linalg.norm(off[:2]) > _PLACE_TOL_XY:
-            problems.append(f"{np.linalg.norm(off[:2]) * 100:.1f} cm to the side")
-        if abs(off[2]) > _PLACE_TOL_Z:
-            problems.append(f"{off[2] * 100:+.1f} cm {'above' if off[2] > 0 else 'below'} the target")
-        if yaw_off > _PLACE_TOL_YAW:
-            problems.append(f"turned {np.degrees(yaw_off):.0f} deg")
-        if problems:
-            raise RuntimeError(f"placed brick didn't stay put: it's {', '.join(problems)}")
+        ctx.place_error, problem = placement_error(look, center_xyz)
+        if problem:
+            raise RuntimeError(f"placed brick didn't stay put: it's {problem}")
+
+
+def put_back(ctx: ZebraArmContext, render, clock) -> None:
+    """Set the held brick back down where grasp_part picked it up (the arm is
+    still in the grip it used there), let go, and back up to hover - for when
+    it turns out it can't be placed after all."""
+    hover_xyz = ctx.picked_from + np.array([0, 0, _HOVER_DZ])
+    ctx.go(render, clock, hover_xyz)
+    ctx.go_oriented(render, clock, hover_xyz)
+    ctx.go_oriented(render, clock, ctx.picked_from)
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
+    ctx.holding = False
+    ctx.go(render, clock, hover_xyz)
+
+
+def placement_error(look, center_xyz) -> tuple[tuple[float, float, float], str]:
+    """How far a looked-at brick (`look` = `(center, yaw)`, as from a relook)
+    is from where it should be: `((xy, z, yaw) error in m/m/rad, problem)`,
+    where `problem` describes what's past the `_PLACE_TOL_*` tolerances -
+    e.g. "8.2 cm to the side, -3.9 cm below the target" - or is "" if the
+    brick is in place. Yaw is measured from square, mod 180 deg."""
+    seen, seen_yaw = look
+    off = np.asarray(seen, dtype=float) - np.asarray(center_xyz, dtype=float)
+    yaw_off = abs(_wrap(2 * seen_yaw) / 2) if seen_yaw is not None else 0.0
+    error = (float(np.linalg.norm(off[:2])), float(off[2]), float(yaw_off))
+    problems = []
+    if error[0] > _PLACE_TOL_XY:
+        problems.append(f"{error[0] * 100:.1f} cm to the side")
+    if abs(off[2]) > _PLACE_TOL_Z:
+        problems.append(f"{off[2] * 100:+.1f} cm {'above' if off[2] > 0 else 'below'} the target")
+    if yaw_off > _PLACE_TOL_YAW:
+        problems.append(f"turned {np.degrees(yaw_off):.0f} deg")
+    return error, ", ".join(problems)
 
 
 def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "right") -> None:

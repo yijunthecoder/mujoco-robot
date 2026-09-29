@@ -58,13 +58,15 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .zebra_publisher import ALL_PART_IDS, PART_BODIES, ZebraPerceptionPublisher
+from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
     _DEFAULT_SCENE,
     ZebraArmContext,
     grasp_part,
     place_part,
+    placement_error,
+    put_back,
 )
 
 COMMAND_TOPIC = "/zebra/skill_commands"
@@ -138,6 +140,12 @@ _BUMP_LOST_S = 2.0
 # the stack, far enough from it (4.8 cm gap) for a finger to fit between them
 # when the tree re-picks it.
 _KNOCK = np.array([0.0, -0.08, 0.0])
+# A part whose place is refused this many times because the stack below it
+# is broken gets escalated (reported ESCALATED) instead of retried again:
+# zebra_bt doesn't limit place retries, and it keeps treating the fallen
+# part below as PLACED (its WorldModel ignores perception updates for placed
+# parts), so it would otherwise re-pick and re-refuse forever.
+_MAX_STACK_REFUSALS = 2
 
 
 def _bump_brick(model, data, brick_id: int, delta: np.ndarray) -> None:
@@ -173,8 +181,13 @@ def run_bridge(
     fault_times: int = 0,
     fault_bump: bool = False,
     knock_placed: str | None = None,
+    knock_later: str | None = None,
 ) -> None:
-    """`knock_placed` (a part id) is a test hook: the first time that part is
+    """`knock_later` (a part id) is a test hook: once that part has been placed
+    and its landing checked, it's knocked `_KNOCK` off the stack - so the
+    stack check before the next place finds it gone.
+
+    `knock_placed` (a part id) is a test hook: the first time that part is
     placed, it's knocked `_KNOCK` off the stack right after the gripper lets
     go - so the place check sees it missing and reports FAILED, and zebra_bt
     re-locates, re-picks and re-places it.
@@ -217,6 +230,24 @@ def run_bridge(
     executor.add_node(perception)
 
     relook_camera: dict[str, str] = {}  # part id -> camera its last look again used
+    placed_at: dict[str, np.ndarray] = {}  # part id -> center it was placed (and checked) at
+    stack_refusals: dict[str, int] = {pid: 0 for pid in ALL_PART_IDS}
+    escalated: set[str] = set()  # parts this bridge escalated (see _MAX_STACK_REFUSALS)
+
+    def _stack_problems(skip: str | None = None) -> list[str]:
+        """Look at every brick placed so far (but `skip`) and describe any
+        that's no longer where it was put, e.g. "legs: 8.2 cm to the side".
+        A brick no camera sees can't be checked and isn't reported."""
+        problems = []
+        for pid, center in placed_at.items():
+            if pid == skip:
+                continue
+            look = _relook(pid)
+            if look is not None:
+                _, problem = placement_error(look, center)
+                if problem:
+                    problems.append(f"{PART_LABELS[pid]}: {problem}")
+        return problems
 
     def _relook(part_id: str) -> tuple[np.ndarray, float] | None:
         """grasp_part's look again from hover: `part_id`'s `(center, yaw)` -
@@ -294,6 +325,20 @@ def run_bridge(
                         )
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
+                        # Check A: never stack onto a brick that's no longer there. Looked
+                        # at from over the pick spot, before carrying the brick over.
+                        broken = _stack_problems(skip=part_id)
+                        if broken:
+                            put_back(ctx, render, clock)
+                            stack_refusals[part_id] += 1
+                            if stack_refusals[part_id] >= _MAX_STACK_REFUSALS:
+                                escalated.add(part_id)
+                            raise RuntimeError(
+                                f"won't place {PART_LABELS[part_id]}: the stack below it is broken "
+                                f"({'; '.join(broken)}) - put it back where it was picked"
+                                + (" - escalating, needs a human" if part_id in escalated else "")
+                            )
+
                         # Victor's stack position for this part; then look at where it landed
                         def _verify() -> tuple[np.ndarray, float] | None:
                             nonlocal knock_placed
@@ -324,6 +369,25 @@ def run_bridge(
                                 f"same footprint, printed face reversed"
                             )
                         perception.status_override[part_id] = "PLACED"
+                        placed_at[part_id] = center_xyz
+
+                        if part_id == knock_later:  # test hook - see run_bridge
+                            knock_later = None
+                            _bump_brick(model, data, ctx.brick_id, _KNOCK)
+                            node.get_logger().warn(
+                                f"FAULT INJECTION: knocked {part_id} "
+                                f"{np.linalg.norm(_KNOCK) * 100:.0f} cm off the stack after it was checked"
+                            )
+
+                        # Check B: once every part is placed, look at the whole zebra.
+                        if set(placed_at) == set(ALL_PART_IDS):
+                            final = _stack_problems()
+                            if final:
+                                node.get_logger().error(f"zebra check: NOT intact - {'; '.join(final)}")
+                            else:
+                                node.get_logger().info(
+                                    f"zebra check: all {len(placed_at)} bricks in place"
+                                )
                     else:
                         raise ValueError(f"unknown skill '{skill}'")
                     # Publish the new status BEFORE replying, so no stale
@@ -335,7 +399,7 @@ def run_bridge(
                     # Not held (failed pick) or let go somewhere wrong (failed place):
                     # either way report where perception actually sees it again, so
                     # the tree can re-locate and re-pick it.
-                    perception.status_override[part_id] = None
+                    perception.status_override[part_id] = "ESCALATED" if part_id in escalated else None
                     node.report(command_id, "FAILED", str(exc))
                     if faulted and fault_bump:
                         _bump_brick(model, data, ctx.brick_id, _BUMP)

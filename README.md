@@ -138,6 +138,20 @@ $ bash scripts/run_zebra.sh --knock-placed body
 ```
 → `3 placed, 0 escalated`, body picked and placed twice
 
+Knock a brick off later: `--knock-later PART` knocks it off the stack after
+its own landing check passed. Before every place the bridge looks at the
+bricks already stacked, so the next part isn't stacked onto nothing: it's
+put back where it was picked and the place fails ("won't place body: the
+stack below it is broken (legs: 8.3 cm to the side)"). The second time, the
+part is escalated to a human (the tree can't redo a part it already counts
+as placed). Once every part is placed, the bridge also checks the whole
+zebra ("zebra check: all 3 bricks in place"):
+
+```bash
+$ bash scripts/run_zebra.sh --knock-later legs
+```
+→ `1 placed, 2 escalated` (body refused twice and escalated, head skipped)
+
 No perception at all: run only the tree, without the bridge. The legs are
 never found; after 3 searches of 10s each they escalate, and body and head
 are skipped:
