@@ -196,14 +196,22 @@
   </worldbody>
 
   <actuator>
+    <!-- Gripper actuators are force-limited to 5 N, like a real gripper's
+         current limit: commanded fully closed, the fingers stop on whatever
+         they grip and squeeze it with at most 5 N, whatever its width. With
+         no limit the squeeze is kp x (how far short of closed the fingers
+         stop), so thinner objects would be crushed harder. Measured on a
+         zebra brick (needs ~0.15 N per finger not to slip): fingers stop at
+         3.14 cm on the 3.2 cm brick, brick nudged 0.15 cm; 2 N nudged it
+         more (0.23 cm). -->
     <position name="left_act1" joint="left_joint1" kp="1350" kv="135" ctrlrange="-2.824 2.824"/>
     <position name="left_act2" joint="left_joint2" kp="1350" kv="135" ctrlrange="-0.209 3.508"/>
     <position name="left_act3" joint="left_joint3" kp="1350" kv="135" ctrlrange="-3.193 0"/>
     <position name="left_act4" joint="left_joint4" kp="350" kv="35" ctrlrange="-1.71 1.71"/>
     <position name="left_act5" joint="left_joint5" kp="625" kv="62" ctrlrange="-1.71 1.71"/>
     <position name="left_act6" joint="left_joint6" kp="625" kv="62" ctrlrange="-2.856 2.856"/>
-    <position name="left_gripper1" joint="left_gripper_joint1" kp="500" kv="15" ctrlrange="-0.0425 0"/>
-    <position name="left_gripper2" joint="left_gripper_joint2" kp="500" kv="15" ctrlrange="0 0.0425"/>
+    <position name="left_gripper1" joint="left_gripper_joint1" kp="500" kv="15" forcelimited="true" forcerange="-5 5" ctrlrange="-0.0425 0"/>
+    <position name="left_gripper2" joint="left_gripper_joint2" kp="500" kv="15" forcelimited="true" forcerange="-5 5" ctrlrange="0 0.0425"/>
 
     <position name="right_act1" joint="right_joint1" kp="1350" kv="135" ctrlrange="-2.824 2.824"/>
     <position name="right_act2" joint="right_joint2" kp="1350" kv="135" ctrlrange="-0.209 3.508"/>
@@ -211,8 +219,8 @@
     <position name="right_act4" joint="right_joint4" kp="350" kv="35" ctrlrange="-1.71 1.71"/>
     <position name="right_act5" joint="right_joint5" kp="625" kv="62" ctrlrange="-1.71 1.71"/>
     <position name="right_act6" joint="right_joint6" kp="625" kv="62" ctrlrange="-2.856 2.856"/>
-    <position name="right_gripper1" joint="right_gripper_joint1" kp="500" kv="15" ctrlrange="-0.0425 0"/>
-    <position name="right_gripper2" joint="right_gripper_joint2" kp="500" kv="15" ctrlrange="0 0.0425"/>
+    <position name="right_gripper1" joint="right_gripper_joint1" kp="500" kv="15" forcelimited="true" forcerange="-5 5" ctrlrange="-0.0425 0"/>
+    <position name="right_gripper2" joint="right_gripper_joint2" kp="500" kv="15" forcelimited="true" forcerange="-5 5" ctrlrange="0 0.0425"/>
   </actuator>
 
   <keyframe>

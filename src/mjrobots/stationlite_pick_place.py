@@ -66,7 +66,11 @@ def grip_to_ctrl(grip: float) -> np.ndarray:
 
 
 _GRIP_OPEN = 1.0
-_GRIP_CLOSED = 0.4  # visually close around the block
+# Close all the way, like a real gripper's "close" - the fingers stop on
+# whatever is between them, squeezing it with the gripper actuators'
+# force limit (forcerange in stationlite_pick_place.xml), not at a
+# position picked to match one object's width.
+_GRIP_CLOSED = 0.0
 
 # left_joint1..6 / right_joint1..6, found by FK search against
 # stationlite_mujoco.urdf.
