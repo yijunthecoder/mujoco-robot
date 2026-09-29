@@ -297,6 +297,7 @@ def move_to_pose(
     settle_steps: int = 150,
     carry=None,
     lead_in_step: float = MAX_WAYPOINT_JUMP,
+    path_check=None,
 ) -> None:
     """Like `move_to_point`, but also holds the gripper at `target_quat`
     throughout - see `solve_ik_pose`. The orientation target is held fixed
@@ -327,6 +328,8 @@ def move_to_pose(
         what,
         lead_in_step,
     )
+    if path_check is not None:
+        path_check(path, what)
     _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
                         max(1, steps // waypoints), settle_steps, carry)
 
@@ -379,6 +382,7 @@ def move_to_point(
     waypoints: int = 30,
     settle_steps: int = 150,
     carry=None,
+    path_check=None,
 ) -> None:
     """Smoothly drive the hand point to `target_pos`.
 
@@ -392,7 +396,9 @@ def move_to_point(
 
     The whole path is solved and checked before the arm moves, so an
     IKError (unreachable waypoint, or a jump over MAX_WAYPOINT_JUMP) leaves
-    the arm where it was.
+    the arm where it was. `path_check`, if given, is called with the
+    planned joint-space path and a description of the move before anything
+    moves too - e.g. arm_clearance.ArmClearance, raising to refuse it.
 
     The PD servos lag a fast-moving ctrl target, so a few cm of tracking
     error remains right after the last waypoint; `settle_steps` holds ctrl
@@ -415,6 +421,8 @@ def move_to_point(
         targets,
         what,
     )
+    if path_check is not None:
+        path_check(path, what)
     _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
                         max(1, steps // waypoints), settle_steps, carry)
 

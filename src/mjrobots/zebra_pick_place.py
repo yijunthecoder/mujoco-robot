@@ -21,6 +21,7 @@ import mujoco
 import mujoco.viewer
 
 from . import sim_step
+from .arm_clearance import ArmClearance
 from .cartesian_control import (
     ARM_JOINTS,
     HAND_LOCAL_OFFSET,
@@ -105,6 +106,8 @@ class ZebraArmContext:
         self.placed_flipped = False
         # Whether the fingers are holding the brick (wrist turns go gentler).
         self.holding = False
+        # Every move is checked against the other arm before it runs.
+        self.clearance = ArmClearance(model, arm)
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -134,10 +137,18 @@ class ZebraArmContext:
         brick_center = self.data.xpos[self.brick_id] + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
         return float(np.linalg.norm(grip_point - brick_center))
 
+    def _check_clearance(self, path, what) -> None:
+        """Refuse a planned move that comes too close to the other arm (see
+        arm_clearance.py) - with the held brick carried along, if any."""
+        self.clearance.check(
+            self.data, self.joint_ids, path, self.body_id,
+            self.brick_id if self.holding else None, what,
+        )
+
     def go(self, render, clock, target):
         move_to_point(
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
-            HAND_LOCAL_OFFSET, self.joint_ids, target,
+            HAND_LOCAL_OFFSET, self.joint_ids, target, path_check=self._check_clearance,
         )
 
     def go_oriented(self, render, clock, target):
@@ -147,6 +158,7 @@ class ZebraArmContext:
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
             HAND_LOCAL_OFFSET, self.joint_ids, target, _yawed(self.grip_quat, self.grip_yaw),
             lead_in_step=_HELD_LEAD_IN_STEP if self.holding else MAX_WAYPOINT_JUMP,
+            path_check=self._check_clearance,
         )
 
 

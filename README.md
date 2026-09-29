@@ -60,6 +60,11 @@ timeout.
 $ bash scripts/run_zebra.sh --confirm-moves first
 ```
 
+Every arm move is also checked against the other arm before it runs (the
+sim itself lets the arms pass through each other): a move that would bring
+the arms - or a held brick - within 2 cm is refused and the skill reports
+`FAILED` (`src/mjrobots/arm_clearance.py`).
+
 ### Fail tests (Victor's retry / escalate behaviour)
 
 `--fail-part` sends every pick of that part 8 cm to the side of the real
@@ -209,6 +214,25 @@ $ python3 scripts/camera_calibration.py --loop      # keep reporting until Ctrl+
 $ python3 scripts/camera_calibration.py --view      # also open the MuJoCo viewer
 ```
 
+The hand cameras ride on the arms, so their readings are first corrected for
+the arm's current pose (forward kinematics), then converted into the headcam
+frame.
+
+**Checking the cameras.** A headless check (no ROS, no display, ~5 s): it
+calibrates the cameras the same way zebra_publisher does, then tests every
+camera against the brick's true position with the arms at home, hovering over
+the stack, hovering over each brick, and in random arm poses, with the bricks
+both spread out and stacked. It prints a summary per camera and ends with
+`PASS` (every camera within 1 cm) or `FAIL` (exits non-zero). Run it after
+changing the cameras, the scene XML, or the calibration:
+
+```bash
+$ python3 scripts/check_camera_agreement.py
+$ python3 scripts/check_camera_agreement.py --tol 0.005                       # allowed error in metres (default 0.01)
+$ python3 scripts/check_camera_agreement.py --pixel-noise 0 --depth-noise 0   # noise-free: should show 0.00 cm
+$ python3 scripts/check_camera_agreement.py --seed 1                          # different random poses and noise
+```
+
 ### Move an arm to a point (Cartesian control)
 
 Runtime IK: drives one stationlite arm's fingertips to any XYZ point (a red
@@ -273,6 +297,7 @@ mujoco-robot/
 │   ├── zebra_publisher.py         # perception: calibrated brick position -> ROS2
 │   └── zebra_skill_bridge.py      # executes zebra_bt pick/place commands + publishes perception
 ├── scripts/                       # CLI entry points for each module above, plus:
+│   ├── check_camera_agreement.py  # headless check: every camera agrees with ground truth
 │   └── run_zebra.sh               # one-command launcher: zebra_bt + skill bridge
 ├── stationlite/                   # stationlite URDF, meshes, and the MuJoCo scene XML
 └── requirements.txt
