@@ -65,7 +65,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from . import sim_step
-from .camera_calibration import REFERENCE_CAMERA
+from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, ZebraPerceptionPublisher
 from .zebra_pick_place import (
@@ -85,6 +85,23 @@ STATUS_TOPIC = "/zebra/skill_status"
 STACK_LEVEL = {"31111p0e": 0, "31111p0f": 1, "31111p0g": 2}
 # Looks averaged by the look again from hover (see `_relook` in run_bridge).
 _RELOOK_SAMPLES = 10
+# Noise of one simulated yaw look (see `_sim_brick_yaw`).
+_YAW_SIGMA = np.radians(2.0)
+
+
+def _sim_brick_yaw(data, brick_id: int, rng: np.random.Generator, samples: int) -> float:
+    """Simulated yaw detector: the brick's rotation about vertical from square
+    (radians, in [-pi/2, pi/2) - a brick looks the same turned 180 deg),
+    averaged over `samples` noisy looks. Like SimulatedCameras.observe for
+    position, it reads the true pose and adds noise - a stand-in for
+    estimating the brick's long axis from a camera image. Only called once a
+    camera has actually seen the brick."""
+    R = data.xmat[brick_id].reshape(3, 3)
+    yaw = np.arctan2(R[1, 0], R[0, 0])
+    looks = yaw + rng.normal(0.0, _YAW_SIGMA, samples)
+    # Average on the doubled angle, where yaw and yaw + 180 deg coincide.
+    mean = np.arctan2(np.sin(2 * looks).mean(), np.cos(2 * looks).mean()) / 2
+    return float((mean + np.pi / 2) % np.pi - np.pi / 2)
 
 
 class ZebraSkillBridge(Node):
@@ -224,21 +241,30 @@ def run_bridge(
     executor.add_node(node)
     executor.add_node(perception)
 
-    def _relook(part_id: str) -> np.ndarray | None:
-        """grasp_part's look again from hover: `part_id`'s center in world
-        frame, averaged over _RELOOK_SAMPLES headcam looks - or None if
-        headcam can't see it (under half the looks landed; with the arm at
-        hover it blocks headcam's view of the middle brick, zebra_body, for
-        either arm). headcam only: its frame *is* the shared frame, so its
-        looks need no camera-to-camera conversion. A hand camera, looking
-        straight down from hover, is the natural source once hand-camera
-        positions are trustworthy away from the home pose."""
+    relook_camera: dict[str, str] = {}  # part id -> camera its last look again used
+
+    def _relook(part_id: str) -> tuple[np.ndarray, float] | None:
+        """grasp_part's look again from hover: `part_id`'s `(center, yaw)` -
+        center in world frame, averaged over _RELOOK_SAMPLES looks from one
+        camera, and its yaw (`_sim_brick_yaw`) - or None if no camera sees it
+        in at least half its looks.
+
+        Cameras are tried headcam first (its frame *is* the shared frame),
+        then the others, each converted to the shared frame the same way
+        perception does (`calibration.to_reference`). With the arm at hover
+        over the middle brick (zebra_body) it blocks headcam and refcam, and
+        the hovering arm's own hand camera, looking straight down, is the one
+        that sees it (measured error 0.8-2.3 mm)."""
         cams = perception.cams[part_id]
-        looks = [p for p in (cams.observe(REFERENCE_CAMERA) for _ in range(_RELOOK_SAMPLES)) if p is not None]
-        if len(looks) < _RELOOK_SAMPLES / 2:
-            return None
-        origin = headcam_R @ np.mean(looks, axis=0) + headcam_t
-        return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+        for camera in (REFERENCE_CAMERA, *(c for c in CAMERAS if c != REFERENCE_CAMERA)):
+            looks = [p for p in (cams.observe(camera) for _ in range(_RELOOK_SAMPLES)) if p is not None]
+            if len(looks) >= _RELOOK_SAMPLES / 2:
+                shared = np.mean([perception.calibration.to_reference(camera, p, cams) for p in looks], axis=0)
+                origin = headcam_R @ shared + headcam_t
+                relook_camera[part_id] = camera
+                yaw = _sim_brick_yaw(data, contexts[part_id].brick_id, perception.rng, _RELOOK_SAMPLES)
+                return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
+        return None
 
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -286,15 +312,21 @@ def run_bridge(
                         relooked = (
                             "brick not visible from hover, kept the original aim"
                             if ctx.relook_shift is None
-                            else f"looked again from hover, aim moved {ctx.relook_shift * 100:.1f} cm"
+                            else f"looked again from hover ({relook_camera.get(part_id)}), aim moved {ctx.relook_shift * 100:.1f} cm"
                         )
                         node.get_logger().info(
-                            f"grasped {part_id} ({relooked}; fingers stopped at "
-                            f"{ctx.grasp_width * 100:.2f} cm; sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
+                            f"grasped {part_id} ({relooked}; grip turned {np.degrees(ctx.grip_yaw):+.0f} deg; "
+                            f"fingers stopped at {ctx.grasp_width * 100:.2f} cm; "
+                            f"sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
                         )
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
                         place_part(ctx, render, clock, _stack_center(part_id))  # ignores command target - see above
+                        if ctx.placed_flipped:
+                            node.get_logger().warn(
+                                f"placed {part_id} turned 180 deg (square grip out of reach at the stack): "
+                                f"same footprint, printed face reversed"
+                            )
                         perception.status_override[part_id] = "PLACED"
                     else:
                         raise ValueError(f"unknown skill '{skill}'")

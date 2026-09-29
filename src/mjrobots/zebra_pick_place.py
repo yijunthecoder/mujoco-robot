@@ -21,7 +21,15 @@ import mujoco
 import mujoco.viewer
 
 from . import sim_step
-from .cartesian_control import ARM_JOINTS, HAND_LOCAL_OFFSET, move_to_point, move_to_pose, _hand_point_and_jac
+from .cartesian_control import (
+    ARM_JOINTS,
+    HAND_LOCAL_OFFSET,
+    MAX_WAYPOINT_JUMP,
+    IKError,
+    move_to_point,
+    move_to_pose,
+    _hand_point_and_jac,
+)
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .stationlite_pick_place import (
     _DEFAULT_SCENE,
@@ -53,6 +61,12 @@ _GRIP_WIDTH_TOL = 0.005
 # wrong or the brick moved: the pick fails so the caller re-locates it. The
 # closing jaws already center a brick up to ~3 cm off by themselves.
 _MAX_RELOOK_SHIFT = 0.04
+# Wrist turns in place (the lead-in of an oriented move) are split into
+# joint steps of at most this per 0.04 s waypoint while a brick is held,
+# ~0.8 rad/s - gentler than the empty-hand 0.2 rad (5 rad/s), which flung a
+# held brick out of the fingers on the up-to-90 deg turn back to square at
+# the stack (4 of 5 test cases dropped at 5 rad/s, 1 at 2.5, none at 1.2).
+_HELD_LEAD_IN_STEP = 0.03
 
 
 class ZebraArmContext:
@@ -79,6 +93,18 @@ class ZebraArmContext:
         # How far the last look again from hover moved the aim (m), or None
         # if there was no look or it couldn't see the brick.
         self.relook_shift: float | None = None
+        # Extra rotation of the grip about vertical (rad) on top of grip_quat,
+        # set by grasp_part/place_part to match the brick's yaw.
+        self.grip_yaw = 0.0
+        # The held brick's yaw relative to grip_yaw: 0 if grasped square, pi if
+        # grasped the other way round (a brick looks the same turned 180 deg,
+        # so either grip works) - place_part turns the brick square from it.
+        self.held_yaw = 0.0
+        # Whether the last place set the brick down turned 180 deg (same
+        # footprint, studs still line up; only the printed face is reversed).
+        self.placed_flipped = False
+        # Whether the fingers are holding the brick (wrist turns go gentler).
+        self.holding = False
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -115,10 +141,46 @@ class ZebraArmContext:
         )
 
     def go_oriented(self, render, clock, target):
+        """Move keeping the gripper in the grip orientation, turned by grip_yaw
+        (turning into it gently while holding a brick)."""
         move_to_pose(
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
-            HAND_LOCAL_OFFSET, self.joint_ids, target, self.grip_quat,
+            HAND_LOCAL_OFFSET, self.joint_ids, target, _yawed(self.grip_quat, self.grip_yaw),
+            lead_in_step=_HELD_LEAD_IN_STEP if self.holding else MAX_WAYPOINT_JUMP,
         )
+
+
+def _yawed(quat: np.ndarray, yaw: float) -> np.ndarray:
+    """`quat` turned by `yaw` radians about the world vertical."""
+    turn = np.empty(4)
+    mujoco.mju_axisAngle2Quat(turn, np.array([0.0, 0.0, 1.0]), yaw)
+    out = np.empty(4)
+    mujoco.mju_mulQuat(out, turn, quat)
+    return out
+
+
+def _wrap(angle: float) -> float:
+    """`angle` wrapped into [-pi, pi)."""
+    return float((angle + np.pi) % (2 * np.pi) - np.pi)
+
+
+def _oriented_approach(ctx: ZebraArmContext, render, clock, hover_xyz, target_xyz, yaws) -> float:
+    """Turn the wrist at `hover_xyz` to the first grip yaw in `yaws` that IK
+    can reach, then descend to `target_xyz` - trying the next yaw if either
+    move is refused. Refusals happen before the arm moves (IKError, see
+    cartesian_control._plan_path), so trying is safe. Returns the yaw used."""
+    last_error = None
+    for yaw in yaws:
+        ctx.grip_yaw = yaw
+        try:
+            ctx.go_oriented(render, clock, hover_xyz)
+            ctx.go_oriented(render, clock, target_xyz)
+            return yaw
+        except IKError as error:
+            last_error = error
+    raise IKError(
+        f"no reachable grip angle among {[round(float(np.degrees(y))) for y in yaws]} deg: {last_error}"
+    )
 
 
 def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int = 200) -> None:
@@ -142,12 +204,21 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
     then lift it clear of the table.
 
     `relook`, if given, is called once the arm is hovering over the brick,
-    before it descends: a no-argument function returning a fresh estimate of
-    the brick's center (world frame), or None if it can't see the brick. The
-    descent then aims at the fresh estimate - a closer, later look than the
-    one `center_xyz` came from, so it catches perception error and a brick
-    that has moved since. A shift over `_MAX_RELOOK_SHIFT` fails the pick
-    instead (the arm stays at hover); None keeps the original aim.
+    before it descends: a no-argument function returning a fresh look at the
+    brick as `(center, yaw)` - center in world frame, yaw its rotation about
+    vertical from square (radians, or None if not measured) - or None if it
+    can't see the brick. The descent then aims at the fresh center - a
+    closer, later look than the one `center_xyz` came from, so it catches
+    perception error and a brick that has moved since. A shift over
+    `_MAX_RELOOK_SHIFT` fails the pick instead (the arm stays at hover); None
+    keeps the original aim.
+
+    With a yaw, the grip turns to match it, so the jaws close across the
+    brick's narrow side whatever angle it lies at. A brick looks the same
+    turned 180 deg, so there are two grips that fit (yaw and yaw + 180): the
+    one needing less wrist turn is tried first, the other if IK can't reach
+    it (every brick angle has at least one reachable grip, both arms, at all
+    three spawn spots). Without a yaw the brick is assumed square.
 
     Uses `move_to_pose` (fixed grip orientation - `ctx.grip_quat`, found once
     at a known-good pose) for the approach/descend/lift, not position-only
@@ -167,12 +238,16 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
     fingers stall at its width; on air they close all the way.
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
+    ctx.grip_yaw = 0.0
+    ctx.holding = False
     ctx.go(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, hover_xyz)
 
     ctx.relook_shift = None
-    seen = relook() if relook is not None else None
-    if seen is not None:
+    brick_yaw = 0.0  # assumed square unless the look again measures it
+    look = relook() if relook is not None else None
+    if look is not None:
+        seen, seen_yaw = look
         shift = np.asarray(seen, dtype=float) - center_xyz
         ctx.relook_shift = float(np.linalg.norm(shift))
         if np.linalg.norm(shift[:2]) > _MAX_RELOOK_SHIFT:
@@ -182,9 +257,12 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
             )
         center_xyz = center_xyz + shift
         hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
-        ctx.go_oriented(render, clock, hover_xyz)
+        if seen_yaw is not None:
+            brick_yaw = float(seen_yaw)
 
-    ctx.go_oriented(render, clock, center_xyz)
+    grips = sorted({_wrap(brick_yaw), _wrap(brick_yaw + np.pi)}, key=abs)
+    grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, grips)
+    ctx.held_yaw = _wrap(brick_yaw - grip_yaw)
     _close_and_settle(ctx, render, clock)
 
     width = ctx.grasp_width = ctx.grip_width()
@@ -198,6 +276,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
         )
 
     # Lift - the brick comes along only because the fingers are gripping it.
+    ctx.holding = True
     ctx.go(render, clock, hover_xyz)
 
 
@@ -213,12 +292,19 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     orientation is reachable at all three stack levels, both arms) - a
     position-only descent would set it down at whatever angle IK left the
     wrist, measured ~20-27 deg off.
+
+    A brick grasped at an angle (see grasp_part) is turned back square: the
+    grip yaw that undoes `ctx.held_yaw` is tried first. If IK can't reach it
+    (the arm's grip turn is narrower at the stack), the brick goes down
+    turned 180 deg instead - same footprint, studs still line up, only the
+    printed face reversed (`ctx.placed_flipped`).
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
     ctx.go(render, clock, hover_xyz)
-    ctx.go_oriented(render, clock, hover_xyz)
-    ctx.go_oriented(render, clock, center_xyz)
+    square, flipped = _wrap(-ctx.held_yaw), _wrap(np.pi - ctx.held_yaw)
+    ctx.placed_flipped = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, [square, flipped]) != square
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
+    ctx.holding = False
     ctx.go(render, clock, hover_xyz)
 
 

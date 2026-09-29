@@ -100,7 +100,7 @@ def _rot_err(model, data, body_id, target_quat):
     return rot_err
 
 
-def _plan_path(q_start, solve, targets, what: str) -> list[np.ndarray]:
+def _plan_path(q_start, solve, targets, what: str, lead_in_step: float = MAX_WAYPOINT_JUMP) -> list[np.ndarray]:
     """Solve every waypoint of a move up front and check it, so a bad
     waypoint raises IKError before the arm has moved at all.
 
@@ -108,7 +108,8 @@ def _plan_path(q_start, solve, targets, what: str) -> list[np.ndarray]:
     is seeded with the previous solution. Getting from the arm's current
     pose to the first waypoint may take a big joint change (e.g. turning
     the wrist into the grip orientation); that stretch is split into
-    joint-space steps of at most MAX_WAYPOINT_JUMP, so it just takes longer.
+    joint-space steps of at most `lead_in_step`, so it just takes longer -
+    pass a smaller one to turn more gently (e.g. while holding something).
     Past the first waypoint, consecutive solutions must stay within
     MAX_WAYPOINT_JUMP of each other - a bigger jump means IK flipped to a
     different arm configuration mid-path, so the move is refused.
@@ -119,7 +120,7 @@ def _plan_path(q_start, solve, targets, what: str) -> list[np.ndarray]:
         q = solve(target, q_prev)
         jump = float(np.abs(q - q_prev).max())
         if i == 0:
-            n = int(np.ceil(jump / MAX_WAYPOINT_JUMP))
+            n = int(np.ceil(jump / min(lead_in_step, MAX_WAYPOINT_JUMP)))
             path.extend(q_prev + (k / n) * (q - q_prev) for k in range(1, n))
         elif jump > MAX_WAYPOINT_JUMP:
             raise IKError(
@@ -295,6 +296,7 @@ def move_to_pose(
     waypoints: int = 30,
     settle_steps: int = 150,
     carry=None,
+    lead_in_step: float = MAX_WAYPOINT_JUMP,
 ) -> None:
     """Like `move_to_point`, but also holds the gripper at `target_quat`
     throughout - see `solve_ik_pose`. The orientation target is held fixed
@@ -323,6 +325,7 @@ def move_to_pose(
         ),
         targets,
         what,
+        lead_in_step,
     )
     _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, path, what,
                         max(1, steps // waypoints), settle_steps, carry)
