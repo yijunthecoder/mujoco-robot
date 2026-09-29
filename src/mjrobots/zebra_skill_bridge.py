@@ -13,11 +13,19 @@ matching reply arrives on `/zebra/skill_status`:
     {"command_id", "status": "SUCCEEDED"|"FAILED"[, "message"]}
 
 This node is that reply: for all three zebra parts (legs/body/head, ids
-31111p0e/f/g - see bom.json) and one arm, it keeps a MuJoCo viewer running,
+31111p0e/f/g - see bom.json) and both arms, it keeps a MuJoCo viewer running,
 executes `grasp_part`/`place_part` (zebra_pick_place.py), and reports the
 result back. Both picks and places go to the command's target: picks to
 where perception last saw the brick, places to Victor's stack positions
 (`placeTargetFor` in his main.cpp).
+
+Arm note: a command may name the arm (`"arm": "left"|"right"`) - then that
+arm does it. Without one (Victor's tree doesn't send it yet) the bridge picks
+the nearest arm for the brick (`scatter.choose_arm`: the arm whose reach zone
+it's in, else the closer base), and a place always goes to the arm holding
+the brick. Before an arm moves, the other arm is parked at home
+(`go_home`) - otherwise it's still hovering over the stack from its last
+place, right where this arm is going.
 
 Coordinate note: per Victor's INTERFACE.md section 2b, every `target` - like
 every perception update - is the brick's body *origin* in the MuJoCo world
@@ -58,12 +66,13 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .scatter import Zone, describe, scatter_bricks
+from .scatter import Zone, arm_bases, choose_arm, describe, scatter_bricks
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
     _DEFAULT_SCENE,
     ZebraArmContext,
+    go_home,
     grasp_part,
     place_part,
     placement_error,
@@ -176,7 +185,7 @@ class _PerceivingSync:
 def run_bridge(
     prefer_gl: str = "egl",
     scene_path: str | None = None,
-    arm: str = "right",
+    arm: str = "nearest",
     fault_part: str | None = None,
     fault_offset: float = 0.08,
     fault_times: int = 0,
@@ -185,8 +194,11 @@ def run_bridge(
     knock_later: str | None = None,
     scatter_seed: int | None = None,
 ) -> None:
-    """`scatter_seed`, if given, starts the bricks at random spots and angles
-    (upright) in the arm's measured reach zone instead of their fixed square
+    """`arm` is "nearest" (each brick picked by the arm nearest to it, see
+    the module docstring) or "left"/"right" (that arm does everything).
+
+    `scatter_seed`, if given, starts the bricks at random spots and angles
+    (upright) in the arms' measured reach zone instead of their fixed square
     spots - see scatter.py. Same seed, same scatter.
 
     `knock_later` (a part id) is a test hook: once that part has been placed
@@ -216,14 +228,21 @@ def run_bridge(
     data = mujoco.MjData(model)
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
     mujoco.mj_forward(model, data)
+    arms = ("left", "right") if arm == "nearest" else (arm,)
     scattered = None
     if scatter_seed is not None:
         scattered = scatter_bricks(
-            model, data, [PART_BODIES[pid] for pid in ALL_PART_IDS], scatter_seed, Zone.load(arm)
+            model, data, [PART_BODIES[pid] for pid in ALL_PART_IDS], scatter_seed,
+            Zone.load("either" if arm == "nearest" else arm),
         )
 
-    # One pick/place context per part (same arm, own brick).
-    contexts = {pid: ZebraArmContext(model, data, arm, PART_BODIES[pid]) for pid in ALL_PART_IDS}
+    # One pick/place context per arm and part (own brick).
+    contexts = {(a, pid): ZebraArmContext(model, data, a, PART_BODIES[pid])
+                for a in arms for pid in ALL_PART_IDS}
+    brick_ids = {pid: contexts[(arms[0], pid)].brick_id for pid in ALL_PART_IDS}
+    zones = {a: Zone.load(a) for a in arms}
+    bases = arm_bases(model, data)
+    held_by: dict[str, str] = {}  # part id -> arm holding it (picked, not yet placed)
     clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     fault_picks = 0  # picks of fault_part seen so far
@@ -281,7 +300,7 @@ def run_bridge(
                 shared = np.mean([perception.calibration.to_reference(camera, p, cams) for p in looks], axis=0)
                 origin = perception.shared_to_world.apply(shared)
                 relook_camera[part_id] = camera
-                yaw = _sim_brick_yaw(data, contexts[part_id].brick_id, perception.rng, _RELOOK_SAMPLES)
+                yaw = _sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
                 return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
         return None
 
@@ -289,7 +308,8 @@ def run_bridge(
         with mujoco.viewer.launch_passive(model, data) as viewer:
             render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), perception)
             node.get_logger().info(
-                f"Ready - watching {COMMAND_TOPIC} for legs/body/head ({arm} arm)."
+                f"Ready - watching {COMMAND_TOPIC} for legs/body/head "
+                + ("(nearest arm per brick)." if arm == "nearest" else f"({arm} arm).")
             )
 
             while viewer.is_running() and rclpy.ok():
@@ -311,7 +331,6 @@ def run_bridge(
                 skill = command["skill"]
                 command_id = command["command_id"]
                 part_id = command["part_id"]
-                ctx = contexts[part_id]
 
                 faulted = False
                 if skill == "pick" and part_id == fault_part:
@@ -324,6 +343,22 @@ def run_bridge(
                     )
 
                 try:
+                    # Which arm: a place goes to the arm holding the brick; else
+                    # the one the command names, else the nearest one.
+                    requested = command.get("arm")
+                    if requested is not None and requested not in arms:
+                        raise ValueError(f"asked for the {requested} arm, but only {'/'.join(arms)} is in use")
+                    use = held_by.get(part_id) if skill == "place" else None
+                    if requested is not None and use is not None and requested != use:
+                        raise ValueError(f"asked to place with the {requested} arm, but the {use} arm is holding it")
+                    use = use or requested or (
+                        arms[0] if len(arms) == 1 else choose_arm(center_xyz[:2], zones, bases)
+                    )
+                    ctx = contexts[(use, part_id)]
+                    for other in arms:
+                        if other != use and go_home(contexts[(other, part_id)], render, clock):
+                            node.get_logger().info(f"parked the {other} arm at home, out of the {use} arm's way")
+
                     if skill == "pick":
                         grasp_part(ctx, render, clock, center_xyz, relook=lambda: _relook(part_id))
                         relooked = (
@@ -331,8 +366,9 @@ def run_bridge(
                             if ctx.relook_shift is None
                             else f"looked again from hover ({relook_camera.get(part_id)}), aim moved {ctx.relook_shift * 100:.1f} cm"
                         )
+                        held_by[part_id] = use
                         node.get_logger().info(
-                            f"grasped {part_id} ({relooked}; grip turned {np.degrees(ctx.grip_yaw):+.0f} deg; "
+                            f"{use} arm grasped {part_id} ({relooked}; grip turned {np.degrees(ctx.grip_yaw):+.0f} deg; "
                             f"fingers stopped at {ctx.grasp_width * 100:.2f} cm; "
                             f"sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
                         )
@@ -368,8 +404,9 @@ def run_bridge(
                             return _relook(part_id)
 
                         place_part(ctx, render, clock, center_xyz, verify=_verify)
+                        held_by.pop(part_id, None)
                         node.get_logger().info(
-                            f"placed {part_id} (" + (
+                            f"{use} arm placed {part_id} (" + (
                                 "not visible from hover, landing unchecked" if ctx.place_error is None
                                 else f"checked with {relook_camera.get(part_id)}: {ctx.place_error[0] * 100:.1f} cm "
                                      f"to the side, {ctx.place_error[1] * 100:+.1f} cm up/down, "
@@ -413,9 +450,11 @@ def run_bridge(
                     # either way report where perception actually sees it again, so
                     # the tree can re-locate and re-pick it.
                     perception.status_override[part_id] = "ESCALATED" if part_id in escalated else None
+                    if part_id in held_by and not contexts[(held_by[part_id], part_id)].holding:
+                        held_by.pop(part_id)  # missed, put back, or let go somewhere wrong
                     node.report(command_id, "FAILED", str(exc))
                     if faulted and fault_bump:
-                        _bump_brick(model, data, ctx.brick_id, _BUMP)
+                        _bump_brick(model, data, brick_ids[part_id], _BUMP)
                         perception.lose_track(part_id, _BUMP_LOST_S)
                         node.get_logger().warn(
                             f"FAULT INJECTION: missed grasp knocked {part_id} "

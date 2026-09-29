@@ -36,7 +36,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gl", default="egl", help="preferred rendering backend (default: egl)")
     parser.add_argument("--scene", default=None, help="path to stationlite_pick_place.xml")
-    parser.add_argument("--arm", choices=["left", "right"], default="right", help="which arm to move")
+    parser.add_argument(
+        "--arm", choices=["nearest", "left", "right"], default="nearest",
+        help="which arm picks each brick: the nearest one (default), or always left/right",
+    )
     parser.add_argument(
         "--fail-part", choices=sorted(PART_NAMES), default=None,
         help="test hook: send this part's picks to the wrong spot so they fail",

@@ -31,8 +31,9 @@ All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 ### Zebra pick/place with Victor's behavior tree (the main one)
 
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
-terminal. The MuJoCo window opens and the right arm stacks legs -> body ->
-head on the green circle, finishing with `3 placed, 0 escalated` (~55-90s).
+terminal. The MuJoCo window opens and the arms stack legs -> body -> head
+on the green circle, finishing with `3 placed, 0 escalated` (~55-90s). Each
+brick is picked by the arm nearest to it (below).
 Victor's tree picks every target: picks where perception last saw the brick,
 places at his stack positions. All positions, perception included, are the
 brick's origin in the MuJoCo world frame (his `INTERFACE.md`, section 2b).
@@ -44,8 +45,8 @@ $ bash scripts/run_zebra.sh
 ```
 
 The bricks start **scattered**: each at a random spot and angle (upright),
-only where the arm can pick it up and place it on the stack at every angle -
-the green area of its reach map (see Notes below; `src/mjrobots/scatter.py`,
+only where an arm can pick it up and place it on the stack at every angle -
+the green area of the arms' reach maps (see Notes below; `src/mjrobots/scatter.py`,
 at least 10 cm apart and 10 cm clear of the stack). Every run is a new
 random scatter, and the first bridge line says which, e.g.
 `scatter seed 7: legs (0.51, -0.38) 41 deg, body (0.48, -0.17) 84 deg, ...`.
@@ -56,18 +57,29 @@ $ bash scripts/run_zebra.sh --scatter 7
 $ bash scripts/run_zebra.sh --fixed-start
 ```
 
-Checked headless (ideal perception, real physics, right arm): 50 seeds,
-150/150 bricks placed, 0.8 cm average place error (max 1.6 cm). Live with
-Victor's tree, seed 7: 3 placed, 0 escalated, all first attempts. 71 of the
-150 were set down turned 180 deg (same footprint, printed face reversed):
-from most angles the square grip isn't reachable at the stack - it never
-happened from the fixed square spots.
-
-Use the left arm instead:
+**Nearest arm per brick.** A brick in only one arm's green area is picked
+by that arm; in both (the middle) or neither, by the arm whose base is closer
+(`scatter.choose_arm`). The place always goes to the arm holding the brick.
+Before an arm moves, the other arm is parked at its home joint angles
+(`go_home`) - otherwise it's still hovering over the stack from its last
+place, right where this arm is going (measured without parking: the arms'
+planned paths overlapped by 7.7 cm). If a command names an arm
+(`"arm": "left"`), that arm does it - Victor's tree doesn't send one yet, so
+it can take the choice over later without changes here. One arm for
+everything, scattered in that arm's own area only:
 
 ```bash
 $ bash scripts/run_zebra.sh --arm left
 ```
+
+Checked headless (ideal perception, real physics): 50 seeds, 150/150
+bricks placed, 80 by the right arm and 70 by the left; 44 seeds used both
+arms. Place error 0.8 cm average (max 1.8 cm); the arms never came closer
+than 8.1 cm (median closest 19.5 cm). Right arm alone, in its own area: also
+150/150, max 1.6 cm. About half the bricks (72 of 150) were set down turned
+180 deg (same footprint, printed face reversed): from most angles the square
+grip isn't reachable at the stack - it never happened from the fixed square
+spots.
 
 Confirm before moving (for the first real-robot runs): each arm move prints
 every joint's current angle, target, and change (flagging changes over
@@ -80,16 +92,17 @@ timeout.
 $ bash scripts/run_zebra.sh --confirm-moves first
 ```
 
-Every arm move is also checked against the other arm before it runs (the
-sim itself lets the arms pass through each other): a move that would bring
-the arms - or a held brick - within 2 cm is refused and the skill reports
-`FAILED` (`src/mjrobots/arm_clearance.py`).
+Every arm move - parking included - is also checked against the other arm
+before it runs (the sim itself lets the arms pass through each other): a
+move that would bring the arms - or a held brick - within 2 cm is refused
+and the skill reports `FAILED` (`src/mjrobots/arm_clearance.py`).
 
 ### Fail tests (Victor's retry / escalate behaviour)
 
-The results below were measured from the old fixed brick spots, so add
-`--fixed-start` to see the same thing (from a scatter, which camera sees a
-brick - and so how a missed pick is noticed - depends on where it lies).
+The results below were measured from the old fixed brick spots with the
+right arm doing everything, so add `--fixed-start --arm right` to see the
+same thing (from a scatter, which camera sees a brick - and so how a missed
+pick is noticed - depends on where it lies and which arm is over it).
 
 `--fail-part` sends every pick of that part 8 cm to the side of the real
 brick, and the pick is reported `FAILED` one of two ways. Legs and head:

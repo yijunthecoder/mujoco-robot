@@ -29,6 +29,7 @@ from .cartesian_control import (
     IKError,
     move_to_point,
     move_to_pose,
+    _confirm_and_follow,
     _hand_point_and_jac,
 )
 from .pick_place import _RealtimeClock, _ThrottledSync
@@ -360,6 +361,24 @@ def put_back(ctx: ZebraArmContext, render, clock) -> None:
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
     ctx.holding = False
     ctx.go(render, clock, hover_xyz)
+
+
+def go_home(ctx: ZebraArmContext, render, clock, waypoints: int = 30) -> bool:
+    """Park the arm at its home joint angles (the scene's "home" keyframe) -
+    a straight move in joint space, no IK: home is known to be clear of the
+    table, the other arm and the stack. Checked against the other arm like
+    every move. Returns False if it was already there (within 0.02 rad)."""
+    qpos_adr = ctx.model.jnt_qposadr[ctx.joint_ids]
+    home = ctx.model.key("home").qpos[qpos_adr]
+    start = ctx.data.qpos[qpos_adr].copy()
+    if np.max(np.abs(home - start)) < 0.02:
+        return False
+    path = [start + (i / waypoints) * (home - start) for i in range(1, waypoints + 1)]
+    what = f"{ctx.arm} arm home"
+    ctx._check_clearance(path, what)
+    _confirm_and_follow(ctx.model, ctx.data, render, clock, ctx.arm_ctrl, start, path, what,
+                        steps_per_wp=20, settle_steps=150, carry=None)
+    return True
 
 
 def placement_error(look, center_xyz) -> tuple[tuple[float, float, float], str]:

@@ -10,6 +10,9 @@ The zone is a JSON file of those grid squares. Only squares whose four
 neighbours are green too are used, and a spot is drawn anywhere inside one -
 so a brick is always between measured-green points, never half in an area
 where some angles fail.
+
+With both arms (`Zone.load("either")`) the zone is both arms' squares
+together, and `choose_arm` says which arm should pick a brick at a spot.
 """
 
 from __future__ import annotations
@@ -39,6 +42,11 @@ class Zone:
 
     @classmethod
     def load(cls, arm: str = "right", path: str | Path | None = None) -> "Zone":
+        """`arm` is "right", "left", or "either" (both arms' squares together)."""
+        if arm == "either":
+            right, left = cls.load("right"), cls.load("left")
+            cells = np.unique(np.round(np.vstack([right.cells, left.cells]), 4), axis=0)
+            return cls(cells, right.cell, "either")
         spec = json.loads(Path(path or ZONES_DIR / f"{arm}.json").read_text())
         green = {(round(x, 4), round(y, 4)) for x, y in spec["cells"]}
         c = spec["cell"]
@@ -53,6 +61,26 @@ class Zone:
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         x, y = self.cells[rng.integers(len(self.cells))]
         return np.array([x, y]) + rng.uniform(-self.cell / 2, self.cell / 2, size=2)
+
+    def covers(self, xy) -> bool:
+        """Whether spot `xy` lies inside one of the zone's squares."""
+        return bool(np.any(np.all(np.abs(self.cells - np.asarray(xy)[:2]) <= self.cell / 2 + 1e-9, axis=1)))
+
+
+def arm_bases(model, data) -> dict[str, np.ndarray]:
+    """Each arm's base (link1) position on the table plane, in world frame."""
+    return {side: data.xpos[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{side}_link1")][:2].copy()
+            for side in ("left", "right")}
+
+
+def choose_arm(xy, zones: dict[str, Zone], bases: dict[str, np.ndarray]) -> str:
+    """The arm to pick a brick at `xy` with: the one whose zone it's in, or -
+    in both zones (the middle) or neither (e.g. knocked out of reach) - the
+    one whose base is closer."""
+    fits = [arm for arm, zone in zones.items() if zone.covers(xy)]
+    if len(fits) == 1:
+        return fits[0]
+    return min(fits or zones, key=lambda arm: float(np.linalg.norm(np.asarray(xy)[:2] - bases[arm])))
 
 
 def _yaw_quat(yaw: float) -> np.ndarray:
