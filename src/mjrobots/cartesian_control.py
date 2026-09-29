@@ -35,7 +35,7 @@ from __future__ import annotations
 import numpy as np
 import mujoco
 
-from . import move_check
+from . import move_check, sim_step
 from .pick_place import _RealtimeClock, _ThrottledSync
 
 # Local-frame offset from "<side>_linkgripper" to the fingertip midpoint,
@@ -332,7 +332,7 @@ def _confirm_and_follow(model, data, render, clock, arm_ctrl_slice, q_start, pat
                         steps_per_wp, settle_steps, carry) -> None:
     """Pass a planned path through `move_check.confirm` (a no-op unless
     confirm-before-moving is switched on), then execute it."""
-    duration_s = (len(path) * steps_per_wp + settle_steps) * model.opt.timestep
+    duration_s = (len(path) * steps_per_wp + settle_steps) * sim_step.CONTROL_DT
     move_check.confirm(what, q_start, path, duration_s, render)
     _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp, settle_steps, carry)
 
@@ -345,7 +345,7 @@ def _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp,
         for s in range(steps_per_wp):
             a = (s + 1) / steps_per_wp
             data.ctrl[arm_ctrl_slice] = ctrl_start + a * (q - ctrl_start)
-            mujoco.mj_step(model, data)
+            sim_step.step(model, data)
             if carry is not None:
                 carry()
             if render is not None:
@@ -354,7 +354,7 @@ def _follow_path(model, data, render, clock, arm_ctrl_slice, path, steps_per_wp,
 
     data.ctrl[arm_ctrl_slice] = path[-1]
     for _ in range(settle_steps):
-        mujoco.mj_step(model, data)
+        sim_step.step(model, data)
         if carry is not None:
             carry()
         if render is not None:
@@ -395,7 +395,7 @@ def move_to_point(
     error remains right after the last waypoint; `settle_steps` holds ctrl
     at the final solution so the arm actually catches up before returning.
 
-    `carry`, if given, is called after every `mj_step` - same convention as
+    `carry`, if given, is called after every control tick (`sim_step.step`) - same convention as
     stationlite_pick_place.py's `_move_to`/`_make_carry`: a no-argument
     callback that snaps a held object's freejoint to the gripper each step,
     since this arm can't hold anything through contact/friction alone.
@@ -444,10 +444,10 @@ def run_demo(
     arm_ctrl_slice = slice(ctrl_offset, ctrl_offset + 6)
     target_pos = np.array(target, dtype=float)
 
-    clock = _RealtimeClock(dt=model.opt.timestep)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        render = _ThrottledSync(viewer, model)
+        render = _ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT)
 
         # Small red marker at the target point, for visual sanity-checking.
         viewer.user_scn.ngeom = 1
@@ -469,6 +469,6 @@ def run_demo(
 
         print("[mjrobots] done - close the window to exit")
         while viewer.is_running():
-            mujoco.mj_step(model, data)
+            sim_step.step(model, data)
             clock.tick()
             render.step()

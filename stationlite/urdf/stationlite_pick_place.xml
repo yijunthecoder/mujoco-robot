@@ -2,8 +2,12 @@
   <!-- implicitfast: the arm's light distal links (small inertia) combined
        with stiff position-actuator gains give a natural frequency too high
        for the default explicit integrator at this timestep, causing
-       oscillation that blows up rather than settling. -->
-  <option integrator="implicitfast"/>
+       oscillation that blows up rather than settling.
+       timestep 0.5 ms (the default is 2 ms): fine enough to hold a 30 g brick
+       by finger friction alone - at 2 ms the squeezed brick wobbles loose
+       mid-carry. Control still runs every 2 ms, 4 physics steps per tick
+       (src/mjrobots/sim_step.py). -->
+  <option integrator="implicitfast" timestep="0.0005"/>
 
   <!-- Arm link/finger STL meshes are used directly as collision geometry (no
        simplified collision shapes were provided), which self-collides badly

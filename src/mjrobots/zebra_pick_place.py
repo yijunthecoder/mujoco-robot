@@ -1,11 +1,12 @@
 """Move one zebra Lego brick to the table's middle point, via runtime IK.
 
-Combines two things that existed separately before this: cartesian_control's
-runtime IK (`move_to_point`, `solve_ik`) for reaching an arbitrary XYZ point,
-and stationlite_pick_place's kinematic grasp mechanism (`_make_carry`,
-`_make_anchor`) for actually holding an object once the gripper closes -
-this gripper's mesh-only fingers can't hold anything through friction alone
-(see stationlite_pick_place.py's module docstring for why).
+Uses cartesian_control's runtime IK (`move_to_point`, `move_to_pose`) for
+reaching an arbitrary XYZ point, and holds the brick by finger friction
+alone, as a real gripper must: the force-limited fingers squeeze it, and
+nothing moves the brick but physics. (The older `_make_carry` /
+`_make_anchor` in stationlite_pick_place.py teleported the brick to the
+fingers every step instead; they are no longer used here. What made the
+friction grip hold was finer physics - see sim_step.py.)
 
 `zebra_legs` sits at x=0.2, y=-0.15 - a different table position than the
 old block demo ever used, and one the old hand-found joint-angle waypoints
@@ -19,6 +20,7 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
+from . import sim_step
 from .cartesian_control import ARM_JOINTS, HAND_LOCAL_OFFSET, move_to_point, move_to_pose, _hand_point_and_jac
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .stationlite_pick_place import (
@@ -27,8 +29,6 @@ from .stationlite_pick_place import (
     _GRIP_CLOSED,
     _Arm,
     _hold,
-    _make_anchor,
-    _make_carry,
 )
 
 # The brick body's geometric center sits 1.92cm below its body origin: the
@@ -71,7 +71,6 @@ class ZebraArmContext:
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{arm}_gripper_joint{i}") for i in (1, 2)
         ]
         self.grasp_width: float | None = None  # finger gap at the last grasp check
-        self.carry = self.new_carry()
 
         # See grasp_part()'s docstring for why this fixed orientation (not
         # position-only IK) is used for the grasp approach specifically.
@@ -82,16 +81,6 @@ class ZebraArmContext:
         self.grip_quat = data.xquat[self.body_id].copy()
         data.qpos[:] = saved_qpos
         mujoco.mj_forward(model, data)
-
-    def new_carry(self):
-        """A carry that holds the brick where the fingers closed on it (see
-        `_make_carry`'s keep_grasp_offset) - one per grasp, since the offset
-        is captured on its first call."""
-        return _make_carry(
-            self.model, self.data, self.brick_id,
-            f"{self.arm}_griperlj_link1", f"{self.arm}_griperlj_link2",
-            keep_grasp_offset=True,
-        )
 
     def grip_width(self) -> float:
         """Current gap between the two fingers, in metres - what a real
@@ -111,24 +100,24 @@ class ZebraArmContext:
         brick_center = self.data.xpos[self.brick_id] + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
         return float(np.linalg.norm(grip_point - brick_center))
 
-    def go(self, render, clock, target, carry_fn=None):
+    def go(self, render, clock, target):
         move_to_point(
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
-            HAND_LOCAL_OFFSET, self.joint_ids, target, carry=carry_fn,
+            HAND_LOCAL_OFFSET, self.joint_ids, target,
         )
 
-    def go_oriented(self, render, clock, target, carry_fn=None):
+    def go_oriented(self, render, clock, target):
         move_to_pose(
             self.model, self.data, render, clock, self.arm_ctrl, self.body_id,
-            HAND_LOCAL_OFFSET, self.joint_ids, target, self.grip_quat, carry=carry_fn,
+            HAND_LOCAL_OFFSET, self.joint_ids, target, self.grip_quat,
         )
 
 
 def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int = 200) -> None:
     """Close the gripper, then keep it closed until the fingers stop moving
-    (under 0.2 mm in 10 physics steps) - like waiting for a real gripper to
+    (under 0.2 mm in 10 control ticks) - like waiting for a real gripper to
     stall before reading its width. On air the fingers are still ~0.8 cm
-    apart when the 150-step close ramp ends and meet ~50 steps later."""
+    apart when the 150-tick close ramp ends and meet ~50 ticks later."""
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
     last = ctx.grip_width()
     for _ in range(max_extra_steps // 10):
@@ -167,9 +156,6 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     ctx.go_oriented(render, clock, center_xyz)
     _close_and_settle(ctx, render, clock)
 
-    # The carry would snap the brick to the fingers from any distance, so check
-    # the fingers actually closed on it first - otherwise a wrong target still
-    # "succeeds" with the brick floating beside the gripper.
     width = ctx.grasp_width = ctx.grip_width()
     if abs(width - BRICK_WIDTH) > _GRIP_WIDTH_TOL:
         _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 100)
@@ -180,33 +166,28 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
             f"(brick is {BRICK_WIDTH * 100:.1f} cm)"
         )
 
-    ctx.carry = ctx.new_carry()
-    ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
+    # Lift - the brick comes along only because the fingers are gripping it.
+    ctx.go(render, clock, hover_xyz)
 
 
 def place_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
-    """Carry the already-grasped brick to `center_xyz` (geometric center)
-    and release it there via anchor, not a raw handoff to physics - see
-    stationlite_pick_place.py's module docstring for why the anchor step
-    (pinning to an exact coordinate while the gripper opens) matters for
-    placement accuracy over this gripper's friction-only grip.
+    """Carry the gripped brick to `center_xyz` (geometric center), set it
+    down, and let go - no teleport: where the brick ends up is where physics
+    leaves it when the fingers open.
+
+    Mirrors grasp_part's approach: travel to the hover point position-only,
+    turn the wrist back into the grip orientation there, then descend
+    oriented. The brick sits in the fingers the way it was picked up, so
+    arriving in the grip orientation puts it down level and square (the grip
+    orientation is reachable at all three stack levels, both arms) - a
+    position-only descent would set it down at whatever angle IK left the
+    wrist, measured ~20-27 deg off.
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
-    ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
-    ctx.go(render, clock, center_xyz, carry_fn=ctx.carry)
-    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 100, carry=ctx.carry)
-
-    # _make_anchor pins the body's ORIGIN (qpos), not its geometric center -
-    # and this brick's origin sits 1.92cm above its center (see
-    # _BRICK_CENTER_OFFSET_Z). Anchoring at center_xyz directly would wedge
-    # the brick ~2cm into the table - confirmed by testing: it held fine
-    # during the anchor (which forces the position every step regardless of
-    # penetration) then popped back out the moment the anchor released and
-    # real contact physics took over. Anchor target must be the
-    # origin-equivalent instead.
-    anchor_origin_target = center_xyz - np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
-    anchor = _make_anchor(ctx.model, ctx.data, ctx.brick_id, anchor_origin_target)
-    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300, carry=anchor)
+    ctx.go(render, clock, hover_xyz)
+    ctx.go_oriented(render, clock, hover_xyz)
+    ctx.go_oriented(render, clock, center_xyz)
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
     ctx.go(render, clock, hover_xyz)
 
 
@@ -228,10 +209,10 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "
     grasp_xyz = np.array([data.xpos[ctx.brick_id][0], data.xpos[ctx.brick_id][1], brick_center_z])
     place_xyz = np.array([_TABLE_PLACE_XYZ[0], _TABLE_PLACE_XYZ[1], brick_center_z])
 
-    clock = _RealtimeClock(dt=model.opt.timestep)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        render = _ThrottledSync(viewer, model)
+        render = _ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT)
 
         grasp_part(ctx, render, clock, grasp_xyz)
         place_part(ctx, render, clock, place_xyz)
@@ -241,6 +222,6 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None, arm: str = "
         print(f"[mjrobots] zebra_legs placed at {final}, {err * 100:.2f} cm lateral error from target")
         print("[mjrobots] done - close the window to exit")
         while viewer.is_running():
-            mujoco.mj_step(model, data)
+            sim_step.step(model, data)
             clock.tick()
             render.step()

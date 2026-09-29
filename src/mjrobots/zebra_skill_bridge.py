@@ -64,6 +64,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from . import sim_step
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, ZebraPerceptionPublisher
 from .zebra_pick_place import (
@@ -181,9 +182,9 @@ def run_bridge(
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
     mujoco.mj_forward(model, data)
 
-    # One pick/place context per part (same arm, own brick + carry).
+    # One pick/place context per part (same arm, own brick).
     contexts = {pid: ZebraArmContext(model, data, arm, PART_BODIES[pid]) for pid in ALL_PART_IDS}
-    clock = _RealtimeClock(dt=model.opt.timestep)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     # Place targets are ours for now, not the command's: zebra_bt's
     # placeTargetFor() sends world-frame coordinates while everything else
@@ -222,7 +223,7 @@ def run_bridge(
 
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            render = _PerceivingSync(_ThrottledSync(viewer, model), perception)
+            render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), perception)
             node.get_logger().info(
                 f"Ready - watching {COMMAND_TOPIC} for legs/body/head ({arm} arm)."
             )
@@ -233,7 +234,7 @@ def run_bridge(
                 try:
                     command = node.pending.get_nowait()
                 except queue.Empty:
-                    mujoco.mj_step(model, data)
+                    sim_step.step(model, data)
                     clock.tick()
                     render.step()
                     continue

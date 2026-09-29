@@ -44,6 +44,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from . import sim_step
 from .gl import configure_gl
 from .pick_place import _RealtimeClock, _ThrottledSync
 
@@ -114,7 +115,7 @@ def _move_to(model, data, render, clock, arm, arm_target, grip, steps, carry=Non
         alpha = (i + 1) / steps
         data.ctrl[arm.arm_ctrl] = arm_start + alpha * (arm_target - arm_start)
         data.ctrl[arm.grip_ctrl] = grip_start + alpha * (grip_target - grip_start)
-        mujoco.mj_step(model, data)
+        sim_step.step(model, data)
         if carry is not None:
             carry()
         clock.tick()
@@ -129,7 +130,7 @@ def _hold(model, data, render, clock, arm, grip, steps, carry=None) -> None:
     for i in range(steps):
         alpha = (i + 1) / steps
         data.ctrl[arm.grip_ctrl] = grip_start + alpha * (grip_target - grip_start)
-        mujoco.mj_step(model, data)
+        sim_step.step(model, data)
         if carry is not None:
             carry()
         clock.tick()
@@ -235,10 +236,10 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
     carry_right = _make_carry(model, data, block_right_id, "right_griperlj_link1", "right_griperlj_link2")
     carry_left = _make_carry(model, data, block_left_id, "left_griperlj_link1", "left_griperlj_link2")
 
-    clock = _RealtimeClock(dt=model.opt.timestep)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        render = _ThrottledSync(viewer, model)
+        render = _ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT)
 
         _pick_and_place(
             model, data, render, clock, right, carry_right, _HOVER_MID_RIGHT, _PLACE_MID_RIGHT, _TABLE_PLACE_XYZ
@@ -261,6 +262,6 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
         )
         print("[mjrobots] done - close the window to exit")
         while viewer.is_running():
-            mujoco.mj_step(model, data)
+            sim_step.step(model, data)
             clock.tick()
             render.step()

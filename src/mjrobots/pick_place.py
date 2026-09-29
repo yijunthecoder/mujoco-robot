@@ -158,9 +158,11 @@ class _ThrottledSync:
     only the render is throttled.
     """
 
-    def __init__(self, viewer, model, target_fps: float = _TARGET_FPS):
+    def __init__(self, viewer, model, target_fps: float = _TARGET_FPS, step_dt: float | None = None):
+        """`step_dt`: sim time per `step()` call, if not one physics timestep
+        (e.g. a control tick of several physics substeps - see sim_step.py)."""
         self._viewer = viewer
-        self._every = max(1, round(1.0 / target_fps / model.opt.timestep))
+        self._every = max(1, round(1.0 / target_fps / (step_dt or model.opt.timestep)))
         self._count = 0
 
     def step(self) -> None:
