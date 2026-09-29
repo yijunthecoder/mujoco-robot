@@ -8,6 +8,8 @@ Requires ROS2 sourced first:
 Usage:
     python scripts/zebra_skill_bridge.py
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
+    python scripts/zebra_skill_bridge.py --scatter 7      # replay scatter seed 7
+    python scripts/zebra_skill_bridge.py --fixed-start    # old fixed brick spots
 
 Also publishes perception (/zebra/perception_updates) from this same
 simulation, so don't run scripts/zebra_publisher.py alongside it - that one
@@ -18,6 +20,7 @@ watches its own static copy of the scene. Run in a second terminal:
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -62,12 +65,27 @@ def main() -> None:
              "so the stack check before the next place finds it gone",
     )
     parser.add_argument(
+        "--scatter", type=int, default=None, metavar="SEED",
+        help="replay this scatter: the bricks start at random spots and angles (upright) where the "
+             "arm can reach them - a new random SEED every run unless given (it's printed)",
+    )
+    parser.add_argument(
+        "--fixed-start", action="store_true",
+        help="start the bricks in their old fixed square spots instead of scattering them",
+    )
+    parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
              "'first' move only, 'all' moves, or 'off' (default)",
     )
     args = parser.parse_args()
     move_check.set_mode(args.confirm_moves)
+    if args.fixed_start:
+        scatter_seed = None
+    elif args.scatter is not None:
+        scatter_seed = args.scatter
+    else:
+        scatter_seed = random.randrange(10_000)
 
     run_bridge(
         prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,
@@ -77,6 +95,7 @@ def main() -> None:
         fault_bump=args.fail_bump,
         knock_placed=PART_NAMES[args.knock_placed] if args.knock_placed else None,
         knock_later=PART_NAMES[args.knock_later] if args.knock_later else None,
+        scatter_seed=scatter_seed,
     )
 
 

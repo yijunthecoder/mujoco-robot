@@ -32,7 +32,7 @@ All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
 terminal. The MuJoCo window opens and the right arm stacks legs -> body ->
-head on the green circle, finishing with `3 placed, 0 escalated` (~55s).
+head on the green circle, finishing with `3 placed, 0 escalated` (~55-90s).
 Victor's tree picks every target: picks where perception last saw the brick,
 places at his stack positions. All positions, perception included, are the
 brick's origin in the MuJoCo world frame (his `INTERFACE.md`, section 2b).
@@ -42,6 +42,26 @@ press Ctrl+C to stop both.
 ```bash
 $ bash scripts/run_zebra.sh
 ```
+
+The bricks start **scattered**: each at a random spot and angle (upright),
+only where the arm can pick it up and place it on the stack at every angle -
+the green area of its reach map (see Notes below; `src/mjrobots/scatter.py`,
+at least 10 cm apart and 10 cm clear of the stack). Every run is a new
+random scatter, and the first bridge line says which, e.g.
+`scatter seed 7: legs (0.51, -0.38) 41 deg, body (0.48, -0.17) 84 deg, ...`.
+Replay a scatter by its seed, or start from the old fixed square spots:
+
+```bash
+$ bash scripts/run_zebra.sh --scatter 7
+$ bash scripts/run_zebra.sh --fixed-start
+```
+
+Checked headless (ideal perception, real physics, right arm): 50 seeds,
+150/150 bricks placed, 0.8 cm average place error (max 1.6 cm). Live with
+Victor's tree, seed 7: 3 placed, 0 escalated, all first attempts. 71 of the
+150 were set down turned 180 deg (same footprint, printed face reversed):
+from most angles the square grip isn't reachable at the stack - it never
+happened from the fixed square spots.
 
 Use the left arm instead:
 
@@ -66,6 +86,10 @@ the arms - or a held brick - within 2 cm is refused and the skill reports
 `FAILED` (`src/mjrobots/arm_clearance.py`).
 
 ### Fail tests (Victor's retry / escalate behaviour)
+
+The results below were measured from the old fixed brick spots, so add
+`--fixed-start` to see the same thing (from a scatter, which camera sees a
+brick - and so how a missed pick is noticed - depends on where it lies).
 
 `--fail-part` sends every pick of that part 8 cm to the side of the real
 brick, and the pick is reported `FAILED` one of two ways. Legs and head:
@@ -321,9 +345,11 @@ mujoco-robot/
 │   ├── camera_calibration.py      # aligns the 4 stationlite cameras into one shared frame
 │   ├── zebra_pick_place.py        # grasp/place one zebra brick via runtime IK
 │   ├── zebra_publisher.py         # perception: calibrated brick position -> ROS2
+│   ├── scatter.py                 # random brick start spots, inside the arm's reach zone
 │   └── zebra_skill_bridge.py      # executes zebra_bt pick/place commands + publishes perception
 ├── scripts/                       # CLI entry points for each module above, plus:
 │   ├── check_camera_agreement.py  # headless check: every camera agrees with ground truth
+│   ├── reach_map.py               # where each arm can pick+place; writes the scatter zones
 │   └── run_zebra.sh               # one-command launcher: zebra_bt + skill bridge
 ├── stationlite/                   # stationlite URDF, meshes, and the MuJoCo scene XML
 └── requirements.txt

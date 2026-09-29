@@ -58,6 +58,7 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
+from .scatter import Zone, describe, scatter_bricks
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
@@ -182,8 +183,13 @@ def run_bridge(
     fault_bump: bool = False,
     knock_placed: str | None = None,
     knock_later: str | None = None,
+    scatter_seed: int | None = None,
 ) -> None:
-    """`knock_later` (a part id) is a test hook: once that part has been placed
+    """`scatter_seed`, if given, starts the bricks at random spots and angles
+    (upright) in the arm's measured reach zone instead of their fixed square
+    spots - see scatter.py. Same seed, same scatter.
+
+    `knock_later` (a part id) is a test hook: once that part has been placed
     and its landing checked, it's knocked `_KNOCK` off the stack - so the
     stack check before the next place finds it gone.
 
@@ -210,6 +216,11 @@ def run_bridge(
     data = mujoco.MjData(model)
     mujoco.mj_resetDataKeyframe(model, data, model.key("home").id)
     mujoco.mj_forward(model, data)
+    scattered = None
+    if scatter_seed is not None:
+        scattered = scatter_bricks(
+            model, data, [PART_BODIES[pid] for pid in ALL_PART_IDS], scatter_seed, Zone.load(arm)
+        )
 
     # One pick/place context per part (same arm, own brick).
     contexts = {pid: ZebraArmContext(model, data, arm, PART_BODIES[pid]) for pid in ALL_PART_IDS}
@@ -225,6 +236,8 @@ def run_bridge(
     perception = ZebraPerceptionPublisher(
         part_ids=ALL_PART_IDS, interval=0.5, model=model, data=data, use_timer=False
     )
+    if scattered is not None:
+        node.get_logger().info(f"scatter seed {scatter_seed}: {describe(scattered)}")
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(perception)
