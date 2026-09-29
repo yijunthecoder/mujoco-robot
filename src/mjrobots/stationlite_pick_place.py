@@ -51,8 +51,22 @@ _DEFAULT_SCENE = (
     Path(__file__).resolve().parent.parent.parent / "stationlite" / "urdf" / "stationlite_pick_place.xml"
 )
 
-_GRIP_OPEN = (-0.0425, 0.0425)
-_GRIP_CLOSED = (-0.0425 * 0.4, 0.0425 * 0.4)  # visually close around the block
+# How far each finger travels from closed (0) to fully open: gripper_joint1
+# opens toward -0.0425, gripper_joint2 toward +0.0425 (their ctrlranges in
+# stationlite_pick_place.xml).
+_FINGER_TRAVEL = 0.0425
+
+
+def grip_to_ctrl(grip: float) -> np.ndarray:
+    """One gripper command - 0.0 fully closed, 1.0 fully open, the single
+    value a real gripper driver takes (and ABC's convention) - as this
+    model's two finger actuator targets."""
+    g = float(np.clip(grip, 0.0, 1.0))
+    return np.array([-g * _FINGER_TRAVEL, g * _FINGER_TRAVEL])
+
+
+_GRIP_OPEN = 1.0
+_GRIP_CLOSED = 0.4  # visually close around the block
 
 # left_joint1..6 / right_joint1..6, found by FK search against
 # stationlite_mujoco.urdf.
@@ -85,11 +99,13 @@ class _Arm:
         self.block_id = block_id
 
 
-def _move_to(model, data, render, clock, arm, arm_target, grip_target, steps, carry=None) -> None:
+def _move_to(model, data, render, clock, arm, arm_target, grip, steps, carry=None) -> None:
+    """Ramp the arm to `arm_target` joint angles and the gripper to `grip`
+    (0 closed .. 1 open) together over `steps` physics steps."""
     arm_start = data.ctrl[arm.arm_ctrl].copy()
     grip_start = data.ctrl[arm.grip_ctrl].copy()
     arm_target = np.asarray(arm_target, dtype=float)
-    grip_target = np.asarray(grip_target, dtype=float)
+    grip_target = grip_to_ctrl(grip)
     for i in range(steps):
         alpha = (i + 1) / steps
         data.ctrl[arm.arm_ctrl] = arm_start + alpha * (arm_target - arm_start)
@@ -101,9 +117,11 @@ def _move_to(model, data, render, clock, arm, arm_target, grip_target, steps, ca
         render.step()
 
 
-def _hold(model, data, render, clock, arm, grip_target, steps, carry=None) -> None:
+def _hold(model, data, render, clock, arm, grip, steps, carry=None) -> None:
+    """Keep the arm where it is and ramp the gripper to `grip` (0 closed ..
+    1 open) over `steps` physics steps."""
     grip_start = data.ctrl[arm.grip_ctrl].copy()
-    grip_target = np.asarray(grip_target, dtype=float)
+    grip_target = grip_to_ctrl(grip)
     for i in range(steps):
         alpha = (i + 1) / steps
         data.ctrl[arm.grip_ctrl] = grip_start + alpha * (grip_target - grip_start)
