@@ -16,6 +16,13 @@ no block position is visible to all four cameras at once. That is fine:
 ``headcam`` (which sees the whole table) is the shared frame, and each other
 camera is tied to it separately using block positions that *both* can see.
 
+A hand camera's calibrated transform only holds while its arm is at home.
+Once the arm moves, the camera moves with it, so `CameraCalibration.to_reference`
+first undoes that motion. It uses the arm's forward kinematics (joint angles
+plus the camera's fixed mount on the gripper link, both from the robot model),
+which a real robot also knows from its joint encoders. Without this step, a
+hand camera hovering over the table reports positions tens of cm off.
+
 Method:
   1. Move a reference object (the zebra ``zebra_legs`` brick, Victor's "feet"
      part) around the table.
@@ -59,6 +66,11 @@ HAND_CAMERAS = ("left_handcam", "right_handcam")
 REFERENCE_CAMERA = "headcam"  # its frame becomes the shared frame
 IMAGE_SIZE = (640, 480)  # (width, height); the scene XML leaves resolution unset
 _RAY_GROUPS = np.array([1, 1, 0, 1, 1, 1], dtype=np.uint8)  # all geom groups except 2 (visual meshes)
+# Line-of-sight ray targets, in units of the block box's half-size: its centre
+# and a point just inside each corner.
+_BOX_SAMPLES = np.array(
+    [[0, 0, 0]] + [[sx, sy, sz] for sx in (-0.9, 0.9) for sy in (-0.9, 0.9) for sz in (-0.9, 0.9)]
+)
 
 # Where the block may be placed (world frame, metres): across the table, from
 # table height up to a few cm above it.
@@ -76,6 +88,13 @@ class RigidTransform:
 
     def apply(self, points: np.ndarray) -> np.ndarray:
         return np.asarray(points) @ self.R.T + self.t
+
+    def inverse(self) -> "RigidTransform":
+        return RigidTransform(self.R.T, -self.R.T @ self.t)
+
+    def then(self, other: "RigidTransform") -> "RigidTransform":
+        """Apply ``self`` first, then ``other``."""
+        return RigidTransform(other.R @ self.R, other.R @ self.t + other.t)
 
     @staticmethod
     def identity() -> "RigidTransform":
@@ -137,6 +156,47 @@ def calibrate(pairs: dict[str, tuple[np.ndarray, np.ndarray]]) -> dict[str, Rigi
     return transforms
 
 
+@dataclass(frozen=True)
+class CameraCalibration:
+    """Calibrated camera -> reference transforms, including cameras that ride on an arm.
+
+    ``transforms`` come from `calibrate`, measured with the arms at home.
+    ``home_mount_poses[name]`` is each hand camera's pose at that same home
+    pose, from forward kinematics (`SimulatedCameras.mount_pose`). At runtime
+    a hand camera's point is first carried from where the camera is now back
+    to where it was during calibration, then converted as usual.
+    """
+
+    transforms: dict[str, RigidTransform]
+    home_mount_poses: dict[str, RigidTransform]
+
+    def to_reference(self, name: str, p_cam: np.ndarray, cams: "SimulatedCameras") -> np.ndarray:
+        """Camera ``name``'s measurement -> reference (headcam) frame, for the arm pose in ``cams.data``."""
+        if name in self.home_mount_poses:
+            # camera now -> robot base (FK now) -> camera at home (inverse of FK at home)
+            now_to_home = cams.mount_pose(name).then(self.home_mount_poses[name].inverse())
+            p_cam = now_to_home.apply(p_cam)
+        return self.transforms[name].apply(p_cam)
+
+
+def calibrate_cameras(
+    model: mujoco.MjModel,
+    n_calib: int,
+    rng: np.random.Generator,
+    pixel_sigma: float = 0.5,
+    depth_sigma: float = 0.002,
+) -> CameraCalibration:
+    """Calibrate every camera on a scratch MjData at the home pose.
+
+    It must be a scratch copy: calibration teleports the block (`place_block`).
+    """
+    scratch = mujoco.MjData(model)
+    _setup_home_pose(model, scratch)
+    cams = SimulatedCameras(model, scratch, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=rng)
+    transforms = calibrate(_collect_calibration_pairs(cams, n_calib, rng))
+    return CameraCalibration(transforms, {name: cams.mount_pose(name) for name in HAND_CAMERAS})
+
+
 class SimulatedCameras:
     """Stand-in for 'run a detector on each camera image and read the depth'.
 
@@ -164,7 +224,13 @@ class SimulatedCameras:
             self.intrinsics[name] = Intrinsics(*IMAGE_SIZE, float(model.cam_fovy[i]))
         body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, block_body)
         self._block_qpos = model.jnt_qposadr[model.body_jntadr[body]]
-        self._block_geom = model.body_geomadr[body]
+        # The block's solid collision box - its other geoms are group-2 visual
+        # meshes, which the line-of-sight rays skip.
+        geoms = range(model.body_geomadr[body], model.body_geomadr[body] + model.body_geomnum[body])
+        boxes = [g for g in geoms if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX and _RAY_GROUPS[model.geom_group[g]]]
+        if len(boxes) != 1:
+            raise ValueError(f"{block_body}: expected one ray-visible collision box, found {len(boxes)}")
+        self._block_geom = boxes[0]
 
     def place_block(self, position: np.ndarray) -> None:
         self.data.qpos[self._block_qpos : self._block_qpos + 3] = position
@@ -176,19 +242,48 @@ class SimulatedCameras:
         i = self.cam_id[name]
         return RigidTransform(self.data.cam_xmat[i].reshape(3, 3).copy(), self.data.cam_xpos[i].copy())
 
-    def _clear_line_of_sight(self, name: str) -> bool:
+    def mount_pose(self, name: str) -> RigidTransform:
+        """Camera-frame -> robot-base transform from forward kinematics.
+
+        This is the pose of the link the camera is mounted on (from the joint
+        angles), composed with the camera's fixed mount on that link (from the
+        robot model). A real robot knows both from its joint encoders plus its
+        URDF or hand-eye calibration, so unlike `cam_pose` the perception side
+        may use it. In sim it equals `cam_pose`.
+        """
         i = self.cam_id[name]
-        origin = self.data.cam_xpos[i]
-        block = self.data.qpos[self._block_qpos : self._block_qpos + 3]
-        direction = block - origin
-        direction = direction / np.linalg.norm(direction)
+        link = self.model.cam_bodyid[i]
+        link_R = self.data.xmat[link].reshape(3, 3)
+        mount_R = np.zeros(9)
+        mujoco.mju_quat2Mat(mount_R, self.model.cam_quat[i])
+        return RigidTransform(link_R @ mount_R.reshape(3, 3), self.data.xpos[link] + link_R @ self.model.cam_pos[i])
+
+    def _clear_line_of_sight(self, name: str) -> bool:
+        """True if any part of the block's box is visible from the camera.
+
+        Rays go to the box centre and to a point just inside each of its
+        corners. If a ray's first hit is the box itself, that part of the
+        block is visible. Don't aim at the block's origin: that point is the
+        centre of the brick's top face, which is exactly the bottom face of
+        any brick stacked on it. The ray then hits whichever box
+        floating-point noise favours, which hid lower stacked bricks from
+        every camera.
+        """
+        i = self.cam_id[name]
+        origin = self.data.cam_xpos[i].copy()
+        g = self._block_geom
+        centre, box_R, half = self.data.geom_xpos[g], self.data.geom_xmat[g].reshape(3, 3), self.model.geom_size[g]
         hit_geom = np.zeros(1, dtype=np.int32)
-        # bodyexclude: don't let the camera's own housing block its view.
-        # geomgroup: skip group 2 (the bricks' visual meshes) so only their
-        # solid collision boxes count - the two share faces exactly, and a
-        # ray would otherwise hit whichever one floating-point noise favours.
-        mujoco.mj_ray(self.model, self.data, origin, direction, _RAY_GROUPS, 1, self.model.cam_bodyid[i], hit_geom)
-        return hit_geom[0] == self._block_geom
+        for local in _BOX_SAMPLES * half:
+            direction = centre + box_R @ local - origin
+            direction /= np.linalg.norm(direction)
+            # bodyexclude: don't let the camera's own housing block its view.
+            # geomgroup: skip group 2 (the bricks' visual meshes) so only
+            # their solid collision boxes count - the two share faces exactly.
+            mujoco.mj_ray(self.model, self.data, origin, direction, _RAY_GROUPS, 1, self.model.cam_bodyid[i], hit_geom)
+            if hit_geom[0] == g:
+                return True
+        return False
 
     def observe(self, name: str, noisy: bool = True) -> np.ndarray | None:
         block_world = self.data.qpos[self._block_qpos : self._block_qpos + 3]

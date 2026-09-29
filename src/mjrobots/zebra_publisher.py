@@ -46,10 +46,9 @@ from .camera_calibration import (
     REFERENCE_CAMERA,
     SimulatedCameras,
     _DEFAULT_SCENE,
-    _collect_calibration_pairs,
     _observe_live_position,
     _setup_home_pose,
-    calibrate,
+    calibrate_cameras,
 )
 
 PERCEPTION_TOPIC = "/zebra/perception_updates"
@@ -92,7 +91,7 @@ class ZebraPerceptionPublisher(Node):
         self,
         part_ids: tuple[str, ...] = (DEFAULT_PART_ID,),
         interval: float = 1.0,
-        n_calib: int = 15,
+        n_calib: int = 30,
         pixel_sigma: float = 0.5,
         depth_sigma: float = 0.002,
         seed: int = 0,
@@ -132,10 +131,7 @@ class ZebraPerceptionPublisher(Node):
 
         # --- calibrate once, on a scratch copy (see class docstring) ---
         self._log(f"calibrating  ({n_calib} samples per camera)")
-        scratch = mujoco.MjData(model)
-        _setup_home_pose(model, scratch)
-        calib_cams = SimulatedCameras(model, scratch, pixel_sigma=pixel_sigma, depth_sigma=depth_sigma, rng=self.rng)
-        self.transforms = calibrate(_collect_calibration_pairs(calib_cams, n_calib, self.rng))
+        self.calibration = calibrate_cameras(model, n_calib, self.rng, pixel_sigma, depth_sigma)
 
         # One camera model per part, each watching its own brick; they share
         # the calibration (it's per camera, not per object) and the rng.
@@ -189,10 +185,12 @@ class ZebraPerceptionPublisher(Node):
             return
 
         # headcam is the shared frame itself, so prefer it when it can see the
-        # block; any other camera that can see it converts to the same answer.
+        # block; any other camera that can see it converts to the same answer
+        # (hand cameras via the arm's current forward kinematics - see
+        # CameraCalibration.to_reference).
         status = override or "LOCATED"
         camera = REFERENCE_CAMERA if REFERENCE_CAMERA in available else available[0]
-        x, y, z = self.transforms[camera].apply(seen[camera])
+        x, y, z = self.calibration.to_reference(camera, seen[camera], self.cams[pid])
         self._publish(
             f"{pid},{status},{x:.4f},{y:.4f},{z:.4f}",
             f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}",
@@ -224,7 +222,7 @@ def _other_perception_publisher(node: Node, wait: float = 3.0) -> bool:
 def run_publisher(
     part_id: str = DEFAULT_PART_ID,
     interval: float = 1.0,
-    n_calib: int = 15,
+    n_calib: int = 30,
     pixel_sigma: float = 0.5,
     depth_sigma: float = 0.002,
     seed: int = 0,

@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument("--scene", default=None, help="path to stationlite_pick_place.xml")
     parser.add_argument("--part-id", default=DEFAULT_PART_ID, help=f"zebra part to report: 31111p0e legs, 31111p0f body, 31111p0g head (default: {DEFAULT_PART_ID})")
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between updates (default: 1.0)")
-    parser.add_argument("--n-calib", type=int, default=15, help="block positions used to fit (default: 15)")
+    parser.add_argument("--n-calib", type=int, default=30, help="block positions used to fit (default: 30)")
     parser.add_argument("--pixel-noise", type=float, default=0.5, help="detector noise, pixels (default: 0.5)")
     parser.add_argument("--depth-noise", type=float, default=0.002, help="depth noise, metres (default: 0.002)")
     parser.add_argument("--seed", type=int, default=0)
