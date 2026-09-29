@@ -263,7 +263,10 @@ def run_bridge(
                 try:
                     if skill == "pick":
                         grasp_part(ctx, render, clock, center_xyz)
-                        node.get_logger().info(f"grasped {part_id} ({ctx.grip_miss() * 100:.1f} cm off center)")
+                        node.get_logger().info(
+                            f"grasped {part_id} (fingers stopped at {ctx.grasp_width * 100:.2f} cm; "
+                            f"sim check: {ctx.grip_miss() * 100:.1f} cm off center)"
+                        )
                         perception.status_override[part_id] = "PICKED"
                     elif skill == "place":
                         place_part(ctx, render, clock, _stack_center(part_id))  # ignores command target - see above

@@ -41,9 +41,13 @@ _BRICK_CENTER_OFFSET_Z = -0.0192
 BRICK_HEIGHT = 0.0384
 _TABLE_PLACE_XYZ = np.array([0.4148, 0.0, -0.1216])  # target_site, table height
 _HOVER_DZ = 0.10  # scanned reachable across the whole grasp/place workspace
-# Grip point further than this from the brick's center after closing = missed.
-# Half the brick's narrow side (3.4 cm): anything more and the jaws aren't on it.
-_GRASP_TOLERANCE = 0.017
+# The brick's narrow side - the jaws close across it (collision box half-size
+# 0.016 in the XML; all three parts are the same 6.4 x 3.2 cm brick).
+BRICK_WIDTH = 0.032
+# The grasp check (see grasp_part) passes if the fingers stop within this of
+# BRICK_WIDTH. Measured: fingers stop at 3.13-3.14 cm on a brick, and close
+# to 0.00 cm on air - nothing lands in between.
+_GRIP_WIDTH_TOL = 0.005
 
 
 class ZebraArmContext:
@@ -63,6 +67,10 @@ class ZebraArmContext:
         self.arm_ctrl = slice(ctrl_offset, ctrl_offset + 6)
         self.brick_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, brick_body_name)
         self.this_arm = _Arm(ctrl_offset=ctrl_offset, block_id=self.brick_id)
+        self._finger_joints = [
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{arm}_gripper_joint{i}") for i in (1, 2)
+        ]
+        self.grasp_width: float | None = None  # finger gap at the last grasp check
         self.carry = self.new_carry()
 
         # See grasp_part()'s docstring for why this fixed orientation (not
@@ -85,8 +93,19 @@ class ZebraArmContext:
             keep_grasp_offset=True,
         )
 
+    def grip_width(self) -> float:
+        """Current gap between the two fingers, in metres - what a real
+        gripper reports from its own encoder, so safe to act on."""
+        q1 = self.data.qpos[self.model.jnt_qposadr[self._finger_joints[0]]]
+        q2 = self.data.qpos[self.model.jnt_qposadr[self._finger_joints[1]]]
+        return float(q2 - q1)
+
     def grip_miss(self) -> float:
-        """Distance between the gripper's grasp point and the brick's center."""
+        """Distance between the gripper's grasp point and the brick's center.
+
+        Sim-only diagnostic (for logs): it reads the brick's true position,
+        which a real robot can't know - grasp_part decides with grip_width.
+        """
         xmat = self.data.xmat[self.body_id].reshape(3, 3)
         grip_point = self.data.xpos[self.body_id] + xmat @ HAND_LOCAL_OFFSET
         brick_center = self.data.xpos[self.brick_id] + np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
@@ -105,6 +124,21 @@ class ZebraArmContext:
         )
 
 
+def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int = 200) -> None:
+    """Close the gripper, then keep it closed until the fingers stop moving
+    (under 0.2 mm in 10 physics steps) - like waiting for a real gripper to
+    stall before reading its width. On air the fingers are still ~0.8 cm
+    apart when the 150-step close ramp ends and meet ~50 steps later."""
+    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
+    last = ctx.grip_width()
+    for _ in range(max_extra_steps // 10):
+        _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 10)
+        width = ctx.grip_width()
+        if abs(width - last) < 0.0002:
+            return
+        last = width
+
+
 def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     """Approach, descend onto, and grip the brick at `center_xyz` (its
     geometric center, not its body origin - see `_BRICK_CENTER_OFFSET_Z`),
@@ -121,21 +155,30 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz) -> None:
     travels to the hover point position-only, turns its wrist into the grip
     orientation there (a zero-length oriented move: all lead-in), and only
     then descends oriented.
+
+    Whether the grasp worked is judged the way a real gripper can: by how
+    far apart the fingers stopped (`grip_width`), not by where the sim says
+    the brick is. The gripper closes with a force limit, so on a brick the
+    fingers stall at its width; on air they close all the way.
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
     ctx.go(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, hover_xyz)
     ctx.go_oriented(render, clock, center_xyz)
-    _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_CLOSED, 150)
+    _close_and_settle(ctx, render, clock)
 
     # The carry would snap the brick to the fingers from any distance, so check
     # the fingers actually closed on it first - otherwise a wrong target still
     # "succeeds" with the brick floating beside the gripper.
-    miss = ctx.grip_miss()
-    if miss > _GRASP_TOLERANCE:
+    width = ctx.grasp_width = ctx.grip_width()
+    if abs(width - BRICK_WIDTH) > _GRIP_WIDTH_TOL:
         _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 100)
         ctx.go(render, clock, hover_xyz)
-        raise RuntimeError(f"missed the brick: gripper closed {miss * 100:.1f} cm from it")
+        what = "nothing" if width < BRICK_WIDTH else "something too wide"
+        raise RuntimeError(
+            f"missed the brick: fingers closed to {width * 100:.1f} cm on {what} "
+            f"(brick is {BRICK_WIDTH * 100:.1f} cm)"
+        )
 
     ctx.carry = ctx.new_carry()
     ctx.go(render, clock, hover_xyz, carry_fn=ctx.carry)
