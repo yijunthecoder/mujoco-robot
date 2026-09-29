@@ -355,6 +355,55 @@ IK at each one (warm-started from the arm's current pose), then ramps
 `data.ctrl` through each solution while stepping physics — so the hand's
 path stays close to a straight line, not just the joints'.
 
+## Notes
+
+### Arm reach maps (2026-09-29)
+
+Where on the table can each arm pick a brick up and put it on the stack?
+Measured before scattering the bricks randomly, so random spots are only
+drawn from where the pick can actually work.
+
+![Right arm reach map](docs/reach_map_right.png)
+
+How it was measured: the legs brick was put on a 3 cm grid over the table
+(x 0.14–0.80, y ±0.45; 713 spots) at 6 angles each (every 30°; a brick looks
+the same turned 180°). At each one, the bridge's real pick and place moves
+were planned with the same IK, joint-jump and arm-clearance checks
+(`grasp_part`, then `place_part` at stack levels 0 and 2), and the arm was
+jumped to the end of each planned move instead of simulating it (planning is
+where every refusal happens, so this is fast and gives the same yes/no). The
+other arm stayed at home. Cameras were asked whether any of them sees a brick
+there, with the arms at home.
+
+What the right arm's map shows:
+
+- **Green (172 spots): every angle works.** Roughly x 0.16–0.53 on the right
+  arm's own side, narrowing towards the middle. Nothing works past y ≈ +0.15
+  (the left arm's side).
+- **Too close to the robot** (x < 0.15) fails: the joints would jump more
+  than 0.2 rad between steps.
+- **Far away** (x > 0.55) works at some angles only (yellow), then none: the
+  grip orientation can't be reached there.
+- **Today's legs spot (0.2, −0.15) sits on the edge:** a brick turned 30°
+  there can be picked but not placed (IK can't reach the stack in the grip
+  that fits it). It works today only because the bricks start square.
+- **Every spot is seen by a camera** (headcam and refcam), so perception
+  can find a brick anywhere on the table.
+
+The left arm is almost an exact mirror image (also 172 green spots). Even
+the edge case mirrors: at today's head spot (0.2, +0.15) the left arm can't
+place a brick turned 150°.
+
+![Left arm reach map](docs/reach_map_left.png)
+
+**Either arm** (a spot and angle counts if at least one arm can do it) -
+what using the nearest arm per brick would cover: **288 green spots, up from
+172 with one arm (+67%)**. The two arms' green areas overlap in the middle
+(71 spots either arm can do at every angle), which is where the choice of
+arm is free.
+
+![Either arm reach map](docs/reach_map_either.png)
+
 ## Menagerie location
 
 `models.py` looks for your existing `mujoco_menagerie` clone at (in order):
