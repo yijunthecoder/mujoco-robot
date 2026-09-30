@@ -54,6 +54,8 @@ class MujocoBridge(Node):
                 ok = self.do_pick(cmd["part_id"], cmd["target"])
             elif cmd["skill"] == "place":
                 ok = self.do_place(cmd["part_id"], cmd["target"])
+            elif cmd["skill"] == "flip":
+                ok = self.do_flip(cmd["part_id"], cmd["target"])
             else:
                 ok = False
         except Exception as e:
@@ -92,6 +94,38 @@ class MujocoBridge(Node):
         self.settle(0.2)
         return True
 
+    def do_flip(self, part_id, target):
+        # Rotate the part 180 degrees about a horizontal axis so it sits upright.
+        # Sim-only: directly set the part's quaternion. Real robot would need a
+        # regrasp. Returns True on success.
+        # Find the body id for this part in the model
+        try:
+            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, part_id)
+        except Exception:
+            return False
+        if body_id < 0:
+            self.get_logger().error(f"flip: unknown body {part_id}")
+            return False
+
+        # Find the free joint for that body (if any) and flip its quaternion
+        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, part_id + "_free")
+        if joint_id < 0:
+            self.get_logger().error(f"flip: no free joint for {part_id}")
+            return False
+
+        qpos_adr = self.model.jnt_qposadr[joint_id]
+        with self.lock:
+            # qpos: [x, y, z, qw, qx, qy, qz] for a free joint
+            # Flip 180 deg about the X axis: quaternion (0, 1, 0, 0)
+            self.data.qpos[qpos_adr + 3] = 0.0   # qw
+            self.data.qpos[qpos_adr + 4] = 1.0   # qx
+            self.data.qpos[qpos_adr + 5] = 0.0   # qy
+            self.data.qpos[qpos_adr + 6] = 0.0   # qz
+            mujoco.mj_forward(self.model, self.data)
+
+        self.settle(0.5)
+        return True
+
     # ---------- low-level helpers (stubs you fill in) ---------------------
     def ik_move_to(self, arm, x, y, z):
         """Solve IK for the 6-DOF chain, set actuator targets, step until
@@ -116,21 +150,67 @@ class MujocoBridge(Node):
 
     # ---------- perception ------------------------------------------------
     def publish_perception(self):
-        # VERY IMPORTANT: this is what LocatePart / IsPartLocated react to.
-        # For a first run, publish the three zebra parts as LOCATED at a
-        # fixed table pose so the BT leaves LocatePart quickly.
+        # Read orientation from the sim and report it
         parts = {
             "31111p0e": (0.40, 0.00, 0.32),
             "31111p0f": (0.40, 0.05, 0.32),
             "31111p0g": (0.40, -0.05, 0.32),
         }
         for pid, (x, y, z) in parts.items():
-            # If you want to simulate a "held" state, check contact between
-            # gripper body and the part body here and swap in PICKED.
+            orient = self.get_orientation(pid)   # returns "UPRIGHT" or "UPSIDE_DOWN"
             s = String()
-            s.data = f"{pid},LOCATED,{x},{y},{z}"
+            s.data = f"{pid},LOCATED,{x},{y},{z},{orient}"
             self.percept_pub.publish(s)
 
+    def get_orientation(self, part_id):
+        """Read the free joint quaternion and classify into one of four poses.
+        Assumes the brick's local +Z axis is 'studs up' and the long axis is +X.
+        """
+        # Try body name as-given, then with the 'zebra_' prefix
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, part_id)
+        if body_id < 0:
+            body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, f"zebra_{part_id}")
+        if body_id < 0:
+            return "UNKNOWN"
+
+        # Find the free joint on that body
+        joint_id = -1
+        for j in range(self.model.njnt):
+            if (self.model.jnt_bodyid[j] == body_id and
+                    self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE):
+                joint_id = j
+                break
+        if joint_id < 0:
+            return "UNKNOWN"
+
+        qpos_adr = self.model.jnt_qposadr[joint_id]
+        qw = self.data.qpos[qpos_adr + 3]
+        qx = self.data.qpos[qpos_adr + 4]
+        qy = self.data.qpos[qpos_adr + 5]
+        qz = self.data.qpos[qpos_adr + 6]
+
+        # Rotate the brick's local axes into world frame.
+        # We care about:
+        #   local Z (studs) -> world Z component   | up/down
+        #   local X (long)  -> world Z component   | on-end vs on-side
+        # Using the rotation matrix of the quaternion:
+        #   R = quat_to_matrix(qw, qx, qy, qz)
+        # Row 2 of R gives the world-frame components of the local axes:
+        #   world_z_of_local_x = R[2][0]
+        #   world_z_of_local_z = R[2][2]
+        r20 = 2.0 * (qx * qz - qw * qy)      # world Z component of local X
+        r22 = 1.0 - 2.0 * (qx * qx + qy * qy)  # world Z component of local Z
+
+        # Classify: which local axis points up in the world?
+        if r22 > 0.7:
+            return "UPRIGHT"       # studs point up
+        if r22 < -0.7:
+            return "UPSIDE_DOWN"   # studs point down
+        if r20 > 0.7 or r20 < -0.7:
+            return "ON_END"        # long axis vertical
+        return "ON_SIDE"           # lying on the long side
+    
 def main():
     rclpy.init()
     MujocoBridge()

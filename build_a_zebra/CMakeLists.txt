@@ -1,7 +1,7 @@
 # CMake Version
 # Project Name ${PROJECT_NAME}
-cmake_minimum_required(VERSION 3.8) 
-project(build_a_zebra) 
+cmake_minimum_required(VERSION 3.8)
+project(build_a_zebra)
 
 # Use C++ 17 IF No Version is already selected
 if(NOT CMAKE_CXX_STANDARD)
@@ -16,17 +16,29 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 
-find_package(ament_cmake REQUIRED)         # ament_cmake is ROS 2’s CMake build system.
+find_package(ament_cmake REQUIRED)         # ament_cmake is ROS 2's CMake build system.
 find_package(rclcpp REQUIRED)              # rclcpp: ROS 2 C++ tools.
 find_package(std_msgs REQUIRED)            # std_msgs: basic ROS messages such as String.
 find_package(geometry_msgs REQUIRED)       # geometry_msgs: ROS geometry types, such as a 3D Point.
 find_package(ament_index_cpp REQUIRED)     # ament_index_cpp: lets your code locate installed resource files.
 find_package(behaviortree_cpp REQUIRED)    # behaviortree_cpp: the Behavior Tree library.
-find_package(nav2_msgs REQUIRED)
 
-# Compiling, also search inside the `include/` folder for header files.”
+# Optional: enables live tree monitoring in BehaviorLens.
+# Install with:  sudo apt install ros-humble-nav2-msgs
+# If missing, the project still builds — just no live monitoring.
+find_package(nav2_msgs QUIET)
+
+# Compiling, also search inside the `include/` folder for header files."
 # Headers (hpp) are stored here
 include_directories(include)
+
+if(nav2_msgs_FOUND)
+  message(STATUS "nav2_msgs found — enabling BtRosLogger live monitoring")
+  set(HAVE_NAV2_MSGS TRUE)
+else()
+  message(STATUS "nav2_msgs NOT found — live monitoring disabled")
+  set(HAVE_NAV2_MSGS FALSE)
+endif()
 
 add_executable(zebra_bt_node
   src/main.cpp                            # Starts ROS, creates objects, runs the BT loop.
@@ -41,8 +53,13 @@ ament_target_dependencies(zebra_bt_node
   std_msgs                                # Use String messages.
   geometry_msgs                           # Use Point messages.
   ament_index_cpp                         # Locate JSON/XML resources.
-  nav2_msgs
 )
+
+# Only link nav2_msgs if it was found
+if(nav2_msgs_FOUND)
+  ament_target_dependencies(zebra_bt_node nav2_msgs)
+  target_compile_definitions(zebra_bt_node PRIVATE HAVE_NAV2_MSGS)
+endif()
 
 # BehaviorTree.CPP v4 exports this target name on this system:
 target_link_libraries(zebra_bt_node
@@ -81,17 +98,17 @@ if(BUILD_TESTING)
     test/task_model_test.cpp
     src/task_model.cpp
   )
-  
+
   ament_add_gtest(recovery_manager_test
     test/recovery_manager_test.cpp
     src/recovery_manager.cpp
   )
- 
+
   ament_add_gtest(world_model_test
     test/world_model_test.cpp
     src/world_model.cpp
   )
-  
+
   ament_target_dependencies(world_model_test
     rclcpp
     std_msgs

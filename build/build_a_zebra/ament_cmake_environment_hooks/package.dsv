@@ -1,0 +1,4 @@
+source;share/build_a_zebra/local_setup.bash
+source;share/build_a_zebra/local_setup.dsv
+source;share/build_a_zebra/local_setup.sh
+source;share/build_a_zebra/local_setup.zsh

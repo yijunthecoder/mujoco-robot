@@ -16,8 +16,11 @@
 #include "behaviortree_cpp/loggers/abstract_logger.h"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+
+#ifdef HAVE_NAV2_MSGS
 #include "nav2_msgs/msg/behavior_tree_log.hpp"
 #include "nav2_msgs/msg/behavior_tree_status_change.hpp"
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -273,6 +276,29 @@ public:
     std::string part;
     getInput("part", part);
     return wm_->getPartState(part).status == PartStatus::ESCALATED
+      ? BT::NodeStatus::SUCCESS
+      : BT::NodeStatus::FAILURE;
+  }
+
+private:
+  WorldModelPtr wm_;
+};
+
+class IsPartUpright : public BT::ConditionNode
+{
+public:
+  IsPartUpright(const std::string & name, const BT::NodeConfig & config,
+                WorldModelPtr wm)
+  : BT::ConditionNode(name, config), wm_(wm) {}
+
+  static BT::PortsList providedPorts()
+  { return {BT::InputPort<std::string>("part")}; }
+
+  BT::NodeStatus tick() override
+  {
+    std::string part;
+    getInput("part", part);
+    return wm_->getPartState(part).orientation == Orientation::UPRIGHT
       ? BT::NodeStatus::SUCCESS
       : BT::NodeStatus::FAILURE;
   }
@@ -575,6 +601,76 @@ private:
   int wait_ticks_{0};
 };
 
+class FlipPart : public BT::StatefulActionNode
+{
+public:
+  FlipPart(const std::string & name, const BT::NodeConfig & config,
+           WorldModelPtr wm, SkillBridgePtr bridge,
+           RolesMapPtr roles, rclcpp::Logger logger)
+  : BT::StatefulActionNode(name, config),
+    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+
+  static BT::PortsList providedPorts()
+  { return {BT::InputPort<std::string>("part")}; }
+
+  BT::NodeStatus onStart() override
+  {
+    getInput("part", part_);
+    const auto state = wm_->getPartState(part_);
+
+    attempt_ = wm_->incrementFlipAttempts(part_);
+    command_id_ = bridge_->send("flip", part_, state.position);
+
+    RCLCPP_INFO(
+      logger_,
+      "[FLIP]    %s: attempt %d (was %s)  [%s]",
+      prettyPart(part_, roles_).c_str(),
+      attempt_,
+      zebra_bt::toString(state.orientation).c_str(),
+      command_id_.c_str());
+
+    wait_ticks_ = 0;
+    return BT::NodeStatus::RUNNING;
+  }
+
+  BT::NodeStatus onRunning() override
+  {
+    const std::string result = bridge_->status(command_id_);
+
+    if (result == "SUCCEEDED") {
+      wm_->setOrientation(part_, Orientation::UPRIGHT);
+      wm_->resetFlipAttempts(part_);
+      RCLCPP_INFO(
+        logger_,
+        "[FLIP]    %s: SUCCESS (attempt %d)",
+        prettyPart(part_, roles_).c_str(), attempt_);
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    if (result == "FAILED" || ++wait_ticks_ > 60) {
+      RCLCPP_WARN(
+        logger_,
+        "[FLIP]    %s: FAILED (attempt %d)",
+        prettyPart(part_, roles_).c_str(), attempt_);
+      return BT::NodeStatus::FAILURE;
+    }
+
+    return BT::NodeStatus::RUNNING;
+  }
+
+  void onHalted() override {}
+
+private:
+  WorldModelPtr wm_;
+  SkillBridgePtr bridge_;
+  RolesMapPtr roles_;
+  rclcpp::Logger logger_;
+  std::string part_;
+  std::string command_id_;
+  int attempt_{0};
+  int wait_ticks_{0};
+};
+
 class RecoveryPolicy : public BT::DecoratorNode
 {
 public:
@@ -658,39 +754,40 @@ private:
 };
 
 }  // namespace zebra_bt
-
-  class BtRosLogger : public BT::StatusChangeLogger
+#ifdef HAVE_NAV2_MSGS
+class BtRosLogger : public BT::StatusChangeLogger
+{
+public:
+  BtRosLogger(rclcpp::Node::SharedPtr node, const BT::Tree & tree)
+  : BT::StatusChangeLogger(tree.rootNode()), node_(node)
   {
-  public:
-    BtRosLogger(rclcpp::Node::SharedPtr node, const BT::Tree & tree)
-    : BT::StatusChangeLogger(tree.rootNode()), node_(node)
-    {
-      pub_ = node_->create_publisher<nav2_msgs::msg::BehaviorTreeLog>(
-        "/behavior_tree_log", 10);
-    }
+    pub_ = node_->create_publisher<nav2_msgs::msg::BehaviorTreeLog>(
+      "/behavior_tree_log", 10);
+  }
 
-    void callback(BT::Duration, const BT::TreeNode & node,
-                  BT::NodeStatus prev, BT::NodeStatus curr) override
-    {
-      nav2_msgs::msg::BehaviorTreeLog msg;
-      msg.timestamp = node_->now();
+  void callback(BT::Duration, const BT::TreeNode & node,
+                BT::NodeStatus prev, BT::NodeStatus curr) override
+  {
+    nav2_msgs::msg::BehaviorTreeLog msg;
+    msg.timestamp = node_->now();
 
-      nav2_msgs::msg::BehaviorTreeStatusChange change;
-      change.timestamp = node_->now();
-      change.node_name = node.name();
-      change.previous_status = BT::toStr(prev);
-      change.current_status = BT::toStr(curr);
-      msg.event_log.push_back(change);
+    nav2_msgs::msg::BehaviorTreeStatusChange change;
+    change.timestamp = node_->now();
+    change.node_name = node.name();
+    change.previous_status = BT::toStr(prev);
+    change.current_status = BT::toStr(curr);
+    msg.event_log.push_back(change);
 
-      pub_->publish(msg);
-    }
+    pub_->publish(msg);
+  }
 
-    void flush() override {}
+  void flush() override {}
 
-  private:
-    rclcpp::Node::SharedPtr node_;
-    rclcpp::Publisher<nav2_msgs::msg::BehaviorTreeLog>::SharedPtr pub_;
-  };
+private:
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::Publisher<nav2_msgs::msg::BehaviorTreeLog>::SharedPtr pub_;
+};
+#endif
 
 int main(int argc, char ** argv)
 {
@@ -765,6 +862,10 @@ int main(int argc, char ** argv)
     [world_model](const std::string & n, const BT::NodeConfig & c) {
       return std::make_unique<zebra_bt::IsPartEscalated>(n, c, world_model); });
 
+  factory.registerBuilder<zebra_bt::IsPartUpright>("IsPartUpright",
+    [world_model](const std::string & n, const BT::NodeConfig & c) {
+      return std::make_unique<zebra_bt::IsPartUpright>(n, c, world_model); });
+
   factory.registerBuilder<zebra_bt::MarkEscalated>("MarkEscalated",
     [world_model, roles, node]
     (const std::string & n, const BT::NodeConfig & c) {
@@ -789,6 +890,12 @@ int main(int argc, char ** argv)
       return std::make_unique<zebra_bt::PlacePart>(
         n, c, world_model, skill_bridge, roles, node->get_logger()); });
 
+  factory.registerBuilder<zebra_bt::FlipPart>("FlipPart",
+    [world_model, skill_bridge, roles, node]
+    (const std::string & n, const BT::NodeConfig & c) {
+      return std::make_unique<zebra_bt::FlipPart>(
+        n, c, world_model, skill_bridge, roles, node->get_logger()); });
+
   factory.registerBuilder<zebra_bt::RecoveryPolicy>("RecoveryPolicy",
     [world_model, recovery_manager, roles, node]
     (const std::string & n, const BT::NodeConfig & c) {
@@ -800,7 +907,13 @@ int main(int argc, char ** argv)
     "/trees/zebra_tree.xml";
 
   auto tree = factory.createTreeFromFile(tree_file);
+
+  #ifdef HAVE_NAV2_MSGS
   auto bt_ros_logger = std::make_shared<BtRosLogger>(node, tree);
+  #else
+  RCLCPP_INFO(node->get_logger(),
+    "Live monitoring disabled (nav2_msgs not installed)");
+  #endif
   zebra_bt::QuietLogger quiet_logger(tree.rootNode());
   quiet_logger.setEnabled(true);
 
@@ -813,9 +926,9 @@ int main(int argc, char ** argv)
   auto print_status_board = [&](int tick) {
     const double secs = tick / TICK_HZ;
     std::printf("\n──── ZEBRA  ·  %.1fs  ·  step %d ────\n", secs, tick);
-    std::printf("  %-8s  %-12s  %-8s  %s\n",
-                "PART", "STATUS", "ATTEMPTS", "MEANING");
-    std::printf("  ────────  ────────────  ────────  ───────\n");
+    std::printf("  %-8s  %-12s  %-12s  %-8s  %s\n",
+                "PART", "STATUS", "ORIENT", "ATTEMPTS", "MEANING");
+    std::printf("  ────────  ────────────  ────────────  ────────  ───────\n");
     for (const auto & id : part_ids) {
       const auto st = world_model->getPartState(id);
       const std::string label = (*roles).count(id) ? (*roles)[id] : id;
@@ -830,9 +943,11 @@ int main(int argc, char ** argv)
         case PartStatus::PLACED:      meaning = "on the zebra -- DONE"; break;
         case PartStatus::ESCALATED:   meaning = "gave up, needs human"; break;
       }
-      std::printf("  %-8s  %-12s  %-8d  %s\n",
+      
+      std::printf("  %-8s  %-12s  %-12s  %-8d  %s\n",
                   label.c_str(),
                   zebra_bt::toString(st.status).c_str(),
+                  zebra_bt::toString(st.orientation).c_str(),
                   st.pick_attempts,
                   meaning);
     }
