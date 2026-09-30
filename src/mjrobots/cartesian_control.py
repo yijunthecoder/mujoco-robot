@@ -212,6 +212,7 @@ def solve_ik_pose(
     tol: float = 1e-4,
     max_step: float = 0.15,
     q_init: np.ndarray | None = None,
+    give_up_after: int | None = None,
 ) -> np.ndarray:
     """Damped-least-squares IK for a point AND orientation, both attached to
     body_id - unlike `solve_ik`, which only constrains position.
@@ -234,6 +235,11 @@ def solve_ik_pose(
     teleported to the solution before the actuators ever drove it there -
     keeps joints off their limits, and raises IKError if the result misses
     the target by more than IK_MAX_POS_ERR / IK_MAX_ROT_ERR.
+
+    `give_up_after`: stop early once the error hasn't improved by 1% for this
+    many iterations while still out of tolerance - an unreachable target
+    otherwise runs all `iters`. For planners that try many targets, most of
+    them unreachable (zebra_flip: 100 lost no solve in testing).
     """
     qpos_adr = model.jnt_qposadr[joint_ids]
     dof_adr = model.jnt_dofadr[joint_ids]
@@ -244,6 +250,7 @@ def solve_ik_pose(
     q = np.clip(data.qpos[qpos_adr] if q_init is None else q_init, lo, hi)
     jacp = np.zeros((3, model.nv))
     jacr = np.zeros((3, model.nv))
+    best, stuck = np.inf, 0
     try:
         for _ in range(iters):
             data.qpos[qpos_adr] = q
@@ -253,8 +260,14 @@ def solve_ik_pose(
             rot_err = _rot_err(model, data, body_id, target_quat)
 
             err = np.concatenate([pos_err, rot_err])
-            if np.linalg.norm(err) < tol:
+            e = np.linalg.norm(err)
+            if e < tol:
                 break
+            if give_up_after is not None:
+                best, stuck = (e, 0) if e < 0.99 * best else (best, stuck + 1)
+                if stuck >= give_up_after and (np.linalg.norm(pos_err) > IK_MAX_POS_ERR
+                                               or np.linalg.norm(rot_err) > IK_MAX_ROT_ERR):
+                    break
 
             mujoco.mj_jac(model, data, jacp, jacr, point, body_id)
             J = np.vstack([jacp[:, dof_adr], jacr[:, dof_adr]])
