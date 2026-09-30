@@ -5,7 +5,7 @@ Victor's `SkillBridge` (build_a_zebra/src/main.cpp, checked out locally at
 ~/ros2_ws/src/build_a_zebra) publishes one JSON message per attempt on
 `/zebra/skill_commands`:
 
-    {"command_id", "skill": "pick"|"place", "part_id", "target": {"x","y","z"}}
+    {"command_id", "skill": "pick"|"place"|"flip", "part_id", "target": {"x","y","z"}}
 
 and blocks that part's `PickPart`/`PlacePart` BT node in RUNNING until a
 matching reply arrives on `/zebra/skill_status`:
@@ -26,6 +26,15 @@ it's in, else the closer base), and a place always goes to the arm holding
 the brick. Before an arm moves, the other arm is parked at home
 (`go_home`) - otherwise it's still hovering over the stack from its last
 place, right where this arm is going.
+
+Flip note: "flip" (his EnsureUpright -> FlipPart, sent for a brick perception
+reports isn't UPRIGHT) turns the brick upright with both arms and sets it down
+on the table (zebra_flip.py); his tree then picks it normally. Already upright
+-> SUCCEEDED at once. The plan is made in a background thread on a snapshot,
+so the viewer and perception keep running (his tree marks a part stale after
+2 s without perception). Planning (~8 s) plus the moves (~25 s) can run past
+his 30 s flip timeout: his tree then sends "flip" again, and that one finds
+the brick upright and succeeds at once.
 
 Coordinate note: per Victor's INTERFACE.md section 2b, every `target` - like
 every perception update - is the brick's body *origin* in the MuJoCo world
@@ -53,8 +62,10 @@ Requires ROS2 sourced first: `source /opt/ros/humble/setup.bash`.
 
 from __future__ import annotations
 
+import copy
 import json
 import queue
+import threading
 
 import mujoco
 import mujoco.viewer
@@ -67,6 +78,8 @@ from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .scatter import UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
+from .stationlite_pick_place import _GRIP_OPEN, _hold
+from .zebra_flip import execute_flip, plan_flip
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
@@ -203,8 +216,8 @@ def run_bridge(
     spots - see scatter.py. Same seed, same scatter. With `drop`, they're
     dropped instead (random tumbles, landing any way up - scatter.drop_bricks);
     a pick of a brick that isn't upright fails before the arm moves, saying
-    how it lies (only top-down grips exist so far), and his tree decides what
-    to do about it.
+    how it lies (only top-down grips exist), and his tree sends "flip" first
+    (both arms needed: arm="nearest").
 
     `knock_later` (a part id) is a test hook: once that part has been placed
     and its landing checked, it's knocked `_KNOCK` off the stack - so the
@@ -309,6 +322,63 @@ def run_bridge(
                 yaw = _sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
                 return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
         return None
+
+    def _flip_look(part_id: str):
+        """execute_flip's `look`: a hand camera looking at the held brick (B's at the
+        handover, A's once B holds it) - here the true pose plus ~2 mm / ~2 deg noise,
+        a stand-in for a real detector, like _sim_brick_yaw."""
+        def look(d):
+            R = d.xmat[brick_ids[part_id]].reshape(3, 3).copy()
+            center = d.xpos[brick_ids[part_id]] + R @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+            th = perception.rng.normal(0.0, _YAW_SIGMA)
+            Rz = np.array([[np.cos(th), -np.sin(th), 0], [np.sin(th), np.cos(th), 0], [0, 0, 1]])
+            return Rz @ R, center + perception.rng.normal(0.0, 0.002, 3)
+        return look
+
+    def _plan_flip_live(part_id: str, order: list[str]):
+        """plan_flip on a snapshot in a background thread, while the sim, viewer
+        and perception keep running here (the arms are parked, nothing moves)."""
+        snapshot = copy.copy(data)
+        others = [brick_ids[p] for p in ALL_PART_IDS if p != part_id]
+        out = {}
+
+        def work():
+            try:
+                out["plan"] = plan_flip(model, snapshot, brick_ids[part_id], others, order)
+            except Exception as exc:  # handed to the main thread
+                out["error"] = exc
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if not viewer.is_running():
+                raise RuntimeError("viewer closed while planning the flip")
+            executor.spin_once(timeout_sec=0.0)
+            sim_step.step(model, data)
+            clock.tick()
+            render.step()
+        if "error" in out:
+            raise out["error"]
+        return out["plan"]
+
+    def _let_go_and_park(part_id: str) -> None:
+        """After a failed flip: open both hands (the brick drops where it is and
+        perception reports how it landed) and park them - each arm's way home may
+        be blocked until the other has gone, so try in both orders."""
+        for a in arms:
+            c = contexts[(a, part_id)]
+            _hold(model, data, render, clock, c.this_arm, _GRIP_OPEN, 150)
+            c.holding = False
+        left_out = list(arms)
+        for _ in range(2):
+            for a in list(left_out):
+                try:
+                    go_home(contexts[(a, part_id)], render, clock)
+                    left_out.remove(a)
+                except Exception as exc:
+                    problem = exc
+        if left_out:
+            node.get_logger().error(f"couldn't park the {'/'.join(left_out)} arm after the failed flip: {problem}")
 
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -450,6 +520,39 @@ def run_bridge(
                                 node.get_logger().info(
                                     f"zebra check: all {len(placed_at)} bricks in place"
                                 )
+                    elif skill == "flip":
+                        label = PART_LABELS[part_id]
+                        lies = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                        if lies == UPRIGHT:
+                            node.get_logger().info(f"{label} is already upright - nothing to flip")
+                        else:
+                            if len(arms) < 2:
+                                raise RuntimeError(f"{label} is {lies}: flipping needs both arms (--arm nearest)")
+                            go_home(ctx, render, clock)  # the other arm is parked above
+                            order = [use, next(a for a in arms if a != use)]
+                            node.get_logger().info(f"{label} is {lies}: planning a two-arm flip ...")
+                            t0 = data.time  # sim time runs in real time on the viewer, planning included
+                            plan, lies = _plan_flip_live(part_id, order)
+                            if plan is None:
+                                raise RuntimeError(f"{label} is {lies} - no way found to flip it (arms not moved)")
+                            node.get_logger().info(f"flip plan ({data.time - t0:.1f} s): {plan.describe()}")
+                            try:
+                                execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render, clock,
+                                             _flip_look(part_id))
+                            except Exception:
+                                _let_go_and_park(part_id)
+                                raise
+                            for _ in range(250):  # let it settle
+                                sim_step.step(model, data)
+                                clock.tick()
+                                render.step()
+                            now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                            if now != UPRIGHT:
+                                raise RuntimeError(f"flip of {label} ended {now}, not upright")
+                            node.get_logger().info(
+                                f"flipped {label} upright, set down at ({plan.set_down[0]:.2f}, {plan.set_down[1]:+.2f}) "
+                                f"- {data.time - t0:.0f} s in all"
+                            )
                     else:
                         raise ValueError(f"unknown skill '{skill}'")
                     # Publish the new status BEFORE replying, so no stale

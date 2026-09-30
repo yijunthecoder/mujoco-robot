@@ -1,9 +1,16 @@
-"""Turn a zebra brick that isn't upright onto its studs, with both arms.
+"""Turn a zebra brick that isn't upright onto its studs, with one arm or both.
 
 A dropped brick lands upright only ~1 time in 6; on its side, on its end or
-upside down it can't be gripped from the top and stacked. One hand can't stand
-it up: whatever a hand does, the brick in it does too, and turning a hand that
-far is out of this arm's reach. So the turn is shared in the air:
+upside down it can't be gripped from the top and stacked.
+
+On its side, one hand can often do it alone (`SoloPlan`): A picks it by its two
+ends, rolls its hand 90 deg - the brick is then upright in its fingers, still
+held at its middle - lowers it onto the table and lets go. That needs the
+rolled hand to reach down to the table without the gripper touching it, so it
+isn't always possible.
+
+Otherwise - and always on its end or upside down, where the turn is bigger than
+one wrist can make - the turn is shared in the air:
 
     1. hand A picks the brick as it lies (by the pair of faces that leaves the
        rest free), lifts it to a handover spot and rolls it part of the way;
@@ -17,9 +24,14 @@ far is out of this arm's reach. So the turn is shared in the air:
 Which pair each hand holds, how far A rolls and which arm is A were chosen by
 measuring 192 brick poses per case (plan-only; see the README): on its side
 86% can be flipped (split 45+45, else A alone 90), on its end 33%, upside down
-20%. `plan_flip` tries those strategies in that order on a scratch copy of the
-simulation - planning only, nothing moves - and returns the first that works;
-`execute_flip` then does it for real, with physics.
+20%. `plan_flip` tries one hand alone first (on its side), then those
+strategies in that order, on a scratch copy of the simulation - planning only,
+nothing moves - and returns the first that works; `execute_flip` then does it
+for real, with physics.
+
+A-rolls-90-then-B-takes-it is the least reliable: B's fingers only fit past A's
+1.25 cm above the brick's middle, and a brick held by its top strip slid out of
+B's fingers on the way down in 4 of 6 physics tests. One hand alone avoids it.
 
 While two hands are near one brick, the 2 cm arm-to-arm rule is relaxed for
 the grippers only ("handover mode"): the arm links must still stay 2 cm apart,
@@ -60,6 +72,9 @@ _BACK_OUT = 0.06  # m A's hand backs out along its own fingers after letting go
 _B_APPROACH = 0.08  # m B comes in straight from this far back along its own fingers
 _MIN_LINKS = 0.02  # m arm links apart (as arm_clearance.MIN_ARM_CLEARANCE)
 _MIN_OBSTACLE = 0.01  # m hands / held brick from other bricks
+# m gripper from the table when one hand sets the brick down with its hand rolled
+# sideways: the gripper then sits beside the brick, only ~2 cm up (its middle).
+_MIN_TABLE_GAP = 0.005
 _HELD_JOINT_STEP = 0.03  # rad per waypoint for joint moves while holding (gentle, like zpp)
 _WIDTH_TOL = 0.005  # m finger gap tolerance for "holding the brick"
 # Most spots/turns the planner tries are out of reach; an IK solve stops once it
@@ -99,7 +114,7 @@ def _rot(axis, angle):
 def _plan_only():
     """Moves only plan: the arm jumps to each planned move's end instead of
     being driven there (planning is where every refusal happens)."""
-    def jump(model, data, render, clock, arm_ctrl, q_start, path, what, spw, settle, carry):
+    def jump(model, data, render, clock, arm_ctrl, q_start, path, what, *timing, **named):
         joints = model.actuator_trnid[arm_ctrl, 0]
         data.qpos[model.jnt_qposadr[joints]] = path[-1]
         data.ctrl[arm_ctrl] = path[-1]
@@ -135,6 +150,10 @@ class FlipPlan:
     q_b: np.ndarray  # B gripping at the handover
     q_a_out: np.ndarray  # A backed out after letting go
     brick_R: np.ndarray  # the brick's rotation A is expected to present at the handover
+    # B's grip point minus the brick centre once B holds it turned upright (world, m). Not
+    # zero: B may grip up to 1.25 cm above A (_B_HEIGHTS), and a set-down aimed as if the
+    # brick were centred pushed it into the table and tipped it over (seed 12's legs).
+    hold_offset: np.ndarray
 
     def describe(self) -> str:
         rest = _CASES[self.lies]["total"] - self.roll_a
@@ -142,6 +161,24 @@ class FlipPlan:
                f"{self.b_side} arm takes it and turns {np.degrees(rest):.0f} deg" if rest > 1e-6
                else f"{self.a_side} arm rolls it 90 deg, {self.b_side} arm takes it")
         return f"{self.lies}: {how}, sets it down upright at ({self.set_down[0]:.2f}, {self.set_down[1]:+.2f})"
+
+
+@dataclass
+class SoloPlan:
+    """One hand alone: pick it by the ends, roll 90 deg, set it down upright."""
+    lies: str
+    a_side: str
+    grip_a: float  # A's grip yaw at the pick
+    center: np.ndarray  # brick centre as it lies
+    wA: float
+    q_a_hover: np.ndarray  # A above the set-down spot, rolled (brick upright in its fingers)
+    set_down: np.ndarray  # upright brick centre on the table where A sets it down
+    a_quat: np.ndarray  # A's hand orientation, rolled
+    hold_offset: np.ndarray  # A's grip point minus the brick centre, rolled (world, m)
+
+    def describe(self) -> str:
+        return (f"{self.lies}: {self.a_side} arm rolls it 90 deg and sets it down upright itself "
+                f"at ({self.set_down[0]:.2f}, {self.set_down[1]:+.2f})")
 
 
 class _Geoms:
@@ -156,6 +193,7 @@ class _Geoms:
         self.links = {s: geoms([f"{s}_link{i}" for i in range(1, 6)]) for s in ("left", "right")}
         self.grip = {s: geoms([f"{s}_linkgripper", f"{s}_griperlj_link1", f"{s}_griperlj_link2"])
                      for s in ("left", "right")}
+        self.table = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "table_top")]
 
     def body(self, body_id):
         return [g for g in range(self.model.ngeom) if self.model.geom_bodyid[g] == body_id
@@ -268,36 +306,99 @@ class _Planner:
             out.append(np.array([xy[0], xy[1], TABLE_TOP + 0.0192]))
         return out
 
-    # --- one strategy ---
+    # --- A's pick, shared by the strategies ---
+    def pick(self, d, cA, Rb0, center, a_axis):
+        """A picks the brick as it lies, fingers across brick axis `a_axis`, and lifts it
+        (plan-only). Returns (grip_a, Rgrasp, q_grasp, rel, q_lift) - rel is the brick's
+        pose in A's hand - or None if it can't."""
+        axis_b = Rb0[:, a_axis]
+        f0 = _mat(cA.grip_quat) @ self.fbody[cA.arm]
+        g0 = np.arctan2(axis_b[1], axis_b[0]) - np.arctan2(f0[1], f0[0])
+        grips = sorted({_wrap(g0), _wrap(g0 + np.pi)}, key=abs)
+        hover = center + [0, 0, _HOVER_DZ]
+        try:
+            cA.grip_yaw, cA.holding = 0.0, False
+            cA.go(None, None, hover); cA.go_oriented(None, None, hover)
+            grip_a = _oriented_approach(cA, None, None, hover, center, grips)
+        except IKError:
+            return None
+        Rgrasp = d.xmat[cA.body_id].reshape(3, 3).copy()
+        q_grasp = d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
+        rel = (Rgrasp.T @ (center - Rb0 @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z]) - d.xpos[cA.body_id]),
+               Rgrasp.T @ Rb0)
+        try:
+            cA.holding = True
+            cA.go(None, None, hover)
+        except IKError:
+            return None
+        return grip_a, Rgrasp, q_grasp, rel, d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
+
+    # --- one hand alone (on its side) ---
+    def attempt_solo(self, lies, Rb0, center, a_side):
+        """A picks it by the ends, rolls its hand the whole 90 deg (the brick is then
+        upright in its fingers), lowers it onto a set-down spot and lets go."""
+        cfg = _CASES[lies]
+        other = "left" if a_side == "right" else "right"
+        d, ctx = self.fresh()
+        cA = ctx[a_side]
+        with _plan_only():
+            picked = self.pick(d, cA, Rb0, center, cfg["a_axis"])
+            if picked is None:
+                return None
+            grip_a, Rgrasp, _, rel, q_lift = picked
+            after_lift = d.qpos.copy(), d.ctrl.copy()
+            fA = Rgrasp @ self.fbody[a_side]
+            # the brick centre relative to A's grip point is fixed in A's hand
+            off_hand = HAND_LOCAL_OFFSET - rel[0] - rel[1] @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+            for sgn in (1, -1):
+                if (_rot(fA, sgn * cfg["total"]) @ Rb0)[2, 2] < 0.99:
+                    continue  # this way round ends upside down
+                for gam in _YAW_TURNS:
+                    RA = _rot([0, 0, 1.0], gam) @ _rot(fA, sgn * cfg["total"]) @ Rgrasp
+                    hold = RA @ off_hand
+                    for spot in self.set_down_spots(center, a_side):
+                        d.qpos[:], d.ctrl[:] = after_lift
+                        mujoco.mj_forward(self.model, d)
+                        hover = spot + hold + [0, 0, _HOVER_DZ]
+                        q_h = self.ik(d, cA, hover, RA, seed=q_lift)
+                        if q_h is None or not self.joint_path_ok(d, cA, other, q_lift, q_h, rel=rel):
+                            continue
+                        try:
+                            # straight down (the held brick isn't carried in plan-only mode, so the
+                            # moves are checked against the other arm only - it's parked at home)
+                            cA.holding = False
+                            move_to_pose(self.model, d, None, None, cA.arm_ctrl, cA.body_id, HAND_LOCAL_OFFSET,
+                                         cA.joint_ids, spot + hold, _quat(RA), lead_in_step=_HELD_JOINT_STEP,
+                                         path_check=cA._check_clearance)
+                        except IKError:
+                            continue
+                        self.set_fingers(d, cA, cfg["wA"])
+                        mujoco.mj_kinematics(self.model, d)
+                        if self.geo.dist(d, self.geo.grip[a_side], self.geo.table) < _MIN_TABLE_GAP:
+                            continue  # the sideways gripper would hit the table
+                        try:
+                            self.set_fingers(d, cA, 0.085)
+                            move_to_pose(self.model, d, None, None, cA.arm_ctrl, cA.body_id, HAND_LOCAL_OFFSET,
+                                         cA.joint_ids, hover, _quat(RA), path_check=cA._check_clearance)
+                            go_home(cA, None, None)
+                        except IKError:
+                            continue
+                        return SoloPlan(lies, a_side, grip_a, center.copy(), cfg["wA"], q_h, spot, _quat(RA), hold)
+        return None
+
+    # --- one strategy, two hands ---
     def attempt(self, lies, Rb0, center, a_side, roll_a):
         cfg = _CASES[lies]
         b_side = "left" if a_side == "right" else "right"
         rest = cfg["total"] - roll_a
-        axis_b = Rb0[:, cfg["a_axis"]]
         d, ctx = self.fresh()
         cA, cB = ctx[a_side], ctx[b_side]
         with _plan_only():
             # 1. A picks it by the chosen pair
-            f0 = _mat(cA.grip_quat) @ self.fbody[a_side]
-            g0 = np.arctan2(axis_b[1], axis_b[0]) - np.arctan2(f0[1], f0[0])
-            grips = sorted({_wrap(g0), _wrap(g0 + np.pi)}, key=abs)
-            hover = center + [0, 0, _HOVER_DZ]
-            try:
-                cA.grip_yaw, cA.holding = 0.0, False
-                cA.go(None, None, hover); cA.go_oriented(None, None, hover)
-                grip_a = _oriented_approach(cA, None, None, hover, center, grips)
-            except IKError:
+            picked = self.pick(d, cA, Rb0, center, cfg["a_axis"])
+            if picked is None:
                 return None
-            Rgrasp = d.xmat[cA.body_id].reshape(3, 3).copy()
-            q_grasp = d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
-            rel = (Rgrasp.T @ (center - Rb0 @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z]) - d.xpos[cA.body_id]),
-                   Rgrasp.T @ Rb0)
-            try:
-                cA.holding = True
-                cA.go(None, None, hover)
-            except IKError:
-                return None
-            q_lift = d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
+            grip_a, Rgrasp, q_grasp, rel, q_lift = picked
             after_lift = d.qpos.copy(), d.ctrl.copy()
             fA = Rgrasp @ self.fbody[a_side]
             for sgn in (1, -1):
@@ -326,14 +427,16 @@ class _Planner:
                                 plan = self._b_side(d, cA, cB, at_s, S, dz, RBtilt, RBfinal, grip_b, rest, rel, center,
                                                     cfg["wA"], cfg["wB"])
                                 if plan is not None:
-                                    q_turn, spot, q_pre, q_b, q_out = plan
+                                    q_turn, spot, q_pre, q_b, q_out, hold = plan
                                     return FlipPlan(lies, a_side, b_side, roll_a, grip_a, center.copy(), q_a, S.copy(),
                                                     S + [0, 0, dz], _quat(RBtilt), _quat(RBfinal), grip_b,
-                                                    q_turn, spot, cfg["wA"], cfg["wB"], q_pre, q_b, q_out, Rb.copy())
+                                                    q_turn, spot, cfg["wA"], cfg["wB"], q_pre, q_b, q_out, Rb.copy(),
+                                                    hold)
         return None
 
     def _b_side(self, d, cA, cB, at_s, S, dz, RBtilt, RBfinal, grip_b, rest, rel, center, wA, wB):
-        """B's part, from A holding the rolled brick at S. Returns (q_b_final, set_down) or None."""
+        """B's part, from A holding the rolled brick at S. Returns
+        (q_b_final, set_down, q_pre, q_b, q_out, hold_offset) or None."""
         d.qpos[:], d.ctrl[:] = at_s
         mujoco.mj_forward(self.model, d)
         PB = S + np.array([0, 0, dz])
@@ -367,7 +470,7 @@ class _Planner:
         if q_out is None or not self.joint_path_ok(d, cA, cB.arm, q_a, q_out, links_only=True, n=8):
             return None
         home_a = self.model.key_qpos[self.home][self.model.jnt_qposadr[cA.joint_ids]]
-        if not self.joint_path_ok(d, cA, cB.arm, q_out, home_a):
+        if not self.joint_path_ok(d, cA, cB.arm, q_out, home_a):  # if B's re-aim tightens it: _leave_for_home
             return None
         # B now holds it (same pose relative to B's hand from here on)
         mujoco.mj_kinematics(self.model, d)
@@ -378,6 +481,9 @@ class _Planner:
         self.carry_brick(d, cA, rel); mujoco.mj_kinematics(self.model, d)
         rel_b = (RBh.T @ (d.qpos[adr:adr + 3] - d.xpos[cB.body_id]), RBh.T @ _mat(d.qpos[adr + 3:adr + 7]))
         self.set_arm(d, cA, home_a); mujoco.mj_forward(self.model, d)
+        # Where B's grip point is relative to the brick centre once turned upright: the set-down
+        # aims B's grip point there, so the brick's centre (not B's grip point) lands on the spot.
+        hold = RBfinal @ (HAND_LOCAL_OFFSET - rel_b[0] - rel_b[1] @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z]))
         # B turns the rest: at the handover spot if it can, else on the way down
         q_bf = self.ik(d, cB, PB, RBfinal, seed=q_b) if rest > 1e-6 else q_b
         start_turn = d.qpos.copy(), d.ctrl.copy()
@@ -391,23 +497,28 @@ class _Planner:
                 d.qpos[:], d.ctrl[:] = start_turn
                 self.set_arm(d, cB, q_turn if q_turn is not None else q_b)
                 mujoco.mj_forward(self.model, d)
+                hover = spot + hold + [0, 0, _HOVER_DZ]
                 if q_turn is None:  # one joint move straight to above the spot, already turned
-                    q_h = self.ik(d, cB, spot + [0, 0, _HOVER_DZ], _mat(_yawed(cB.grip_quat, grip_b)), seed=q_b)
+                    q_h = self.ik(d, cB, hover, RBfinal, seed=q_b)
                     if q_h is None or not self.joint_path_ok(d, cB, cA.arm, q_b, q_h, rel=rel_b):
                         continue
                 try:
                     cB.grip_yaw, cB.holding = grip_b, False
-                    hover = spot + [0, 0, _HOVER_DZ]
                     cB.go(None, None, hover); cB.go_oriented(None, None, hover)
-                    cB.go_oriented(None, None, spot)
+                    cB.go_oriented(None, None, spot + hold)
                     cB.go(None, None, hover)
                 except IKError:
                     continue
-                return (q_turn, spot, q_pre, q_b, q_out)
+                return (q_turn, spot, q_pre, q_b, q_out, hold)
         return None
 
     def plan(self, lies, Rb0, center):
         cfg = _CASES[lies]
+        if lies == ON_SIDE:  # one hand alone first: no handover
+            for a_side in self.arms_order:
+                p = self.attempt_solo(lies, Rb0, center, a_side)
+                if p is not None:
+                    return p
         for a_side in self.arms_order:
             for roll_a in cfg["rolls"]:
                 p = self.attempt(lies, Rb0, center, a_side, roll_a)
@@ -416,7 +527,8 @@ class _Planner:
         return None
 
 
-def plan_flip(model, data, brick_body: int, other_bricks: list[int], arms_order: list[str]) -> tuple[FlipPlan | None, str]:
+def plan_flip(model, data, brick_body: int, other_bricks: list[int],
+              arms_order: list[str]) -> tuple[FlipPlan | SoloPlan | None, str]:
     """Plan a flip of `brick_body` from the current state (arms should be at
     home). Returns (plan, how it lies) - plan None if no strategy works."""
     R = data.xmat[brick_body].reshape(3, 3).copy()
@@ -456,18 +568,46 @@ def _joint_move(ctx: ZebraArmContext, render, clock, q_target, what, gentle=True
                                           steps_per_wp=20, settle_steps=150, carry=None)
 
 
-def execute_flip(plan: FlipPlan, contexts: dict, render, clock, look) -> None:
-    """Do `plan` for real (contexts: {arm: ZebraArmContext} on the live data).
-    `look(data)` returns the held brick's (rotation, centre) as a camera sees it.
-    Raises RuntimeError / IKError if a step fails (fingers miss, a move is refused)."""
-    A, B = contexts[plan.a_side], contexts[plan.b_side]
-    model, data = A.model, A.data
-    geo = _Geoms(model)
-    a_body = HAND_LOCAL_OFFSET / np.linalg.norm(HAND_LOCAL_OFFSET)
-    _hold(model, data, render, clock, A.this_arm, _GRIP_OPEN, 60)
-    _hold(model, data, render, clock, B.this_arm, _GRIP_OPEN, 60)
+_CLEAR_STEPS = (np.array([0, 0, 0.05]), None, np.array([0, 0, 0.10]))  # up 5 cm, 4 cm further back, up 10 cm
 
-    # 1. A picks it as it lies
+
+def _leave_for_home(A: ZebraArmContext, render, clock, handover_check, a_body) -> None:
+    """A's way home once it has let go and backed out. The plan checked it with
+    B where the plan put B, but B re-aims at where the brick really hangs
+    (~1 cm off), so the straight way home can come just under 2 cm (seed 1's
+    body: 1.8 cm). Then A first moves a little further clear - up, or further
+    back along its fingers, checked links-only like the back-out - and tries
+    home again. Planning with slack instead cost too many plans (17 -> 12 of 30)."""
+    try:
+        go_home(A, render, clock)
+        return
+    except IKError as first:
+        refused = first
+    model, data = A.model, A.data
+    q0 = data.qpos[model.jnt_qposadr[A.joint_ids]].copy()
+    R = data.xmat[A.body_id].reshape(3, 3).copy()
+    here = data.xpos[A.body_id] + R @ HAND_LOCAL_OFFSET
+    normal_check = A._check_clearance
+    for step in _CLEAR_STEPS:
+        target = here + (step if step is not None else -0.04 * (R @ a_body))
+        try:
+            q = solve_ik_pose(model, data, A.body_id, HAND_LOCAL_OFFSET, A.joint_ids, target, _quat(R),
+                              q_init=q0, iters=800)
+            A._check_clearance = lambda p, w: handover_check(p, w, A)  # the small step: links only
+            try:
+                _joint_move(A, render, clock, q, f"{A.arm} arm moves clear of the other hand", gentle=False)
+            finally:
+                A._check_clearance = normal_check  # home: the full 2 cm rule again
+            go_home(A, render, clock)
+            return
+        except IKError:
+            continue
+    raise refused
+
+
+def _pick_as_it_lies(A: ZebraArmContext, plan, render, clock) -> None:
+    """A picks the brick as it lies (plan.grip_a) and lifts it to hover."""
+    model, data = A.model, A.data
     hover = plan.center + [0, 0, _HOVER_DZ]
     A.grip_yaw, A.holding = 0.0, False
     A.go(render, clock, hover)
@@ -481,6 +621,55 @@ def execute_flip(plan: FlipPlan, contexts: dict, render, clock, look) -> None:
                            f"expected {plan.wA * 100:.1f})")
     A.holding = True
     A.go(render, clock, hover)
+
+
+def _set_down_seen(ctx: ZebraArmContext, render, clock, set_down, quat, look) -> None:
+    """Lower the held brick straight down onto `set_down` (its centre, upright) and let
+    go. Aimed by where a camera sees the brick in the fingers (`look`), not where the
+    fingers are: a brick held 1.25 cm off its middle, set down as if centred, was
+    pushed into the table and tipped over."""
+    model, data = ctx.model, ctx.data
+    _, center_seen = look(data)
+    grip_point = data.xpos[ctx.body_id] + data.xmat[ctx.body_id].reshape(3, 3) @ HAND_LOCAL_OFFSET
+    target = set_down + (grip_point - center_seen)
+    hover = target + [0, 0, _HOVER_DZ]
+    move_to_pose(model, data, render, clock, ctx.arm_ctrl, ctx.body_id, HAND_LOCAL_OFFSET, ctx.joint_ids,
+                 hover, quat, lead_in_step=_HELD_JOINT_STEP, path_check=ctx._check_clearance)
+    move_to_pose(model, data, render, clock, ctx.arm_ctrl, ctx.body_id, HAND_LOCAL_OFFSET, ctx.joint_ids,
+                 target, quat, lead_in_step=_HELD_JOINT_STEP, path_check=ctx._check_clearance)
+    _hold(model, data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
+    ctx.holding = False
+    move_to_pose(model, data, render, clock, ctx.arm_ctrl, ctx.body_id, HAND_LOCAL_OFFSET, ctx.joint_ids,
+                 hover, quat, path_check=ctx._check_clearance)
+
+
+def _execute_solo(plan: SoloPlan, A: ZebraArmContext, render, clock, look) -> None:
+    """One hand alone: pick it by the ends, roll 90 deg over the spot, set it down, go home."""
+    _hold(A.model, A.data, render, clock, A.this_arm, _GRIP_OPEN, 60)
+    _pick_as_it_lies(A, plan, render, clock)
+    _joint_move(A, render, clock, plan.q_a_hover, f"{A.arm} arm rolls the brick upright")
+    _set_down_seen(A, render, clock, plan.set_down, plan.a_quat, look)
+    go_home(A, render, clock)
+
+
+def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look) -> None:
+    """Do `plan` for real (contexts: {arm: ZebraArmContext} on the live data).
+    `look(data)` returns the held brick's (rotation, centre) as a camera sees it - at the
+    handover (B re-aims its grip) and before the set-down (aimed by where the brick really
+    sits in the fingers).
+    Raises RuntimeError / IKError if a step fails (fingers miss, a move is refused)."""
+    if isinstance(plan, SoloPlan):
+        _execute_solo(plan, contexts[plan.a_side], render, clock, look)
+        return
+    A, B = contexts[plan.a_side], contexts[plan.b_side]
+    model, data = A.model, A.data
+    geo = _Geoms(model)
+    a_body = HAND_LOCAL_OFFSET / np.linalg.norm(HAND_LOCAL_OFFSET)
+    _hold(model, data, render, clock, A.this_arm, _GRIP_OPEN, 60)
+    _hold(model, data, render, clock, B.this_arm, _GRIP_OPEN, 60)
+
+    # 1. A picks it as it lies
+    _pick_as_it_lies(A, plan, render, clock)
 
     # 2. A carries it to the handover spot, rolling it
     _joint_move(A, render, clock, plan.q_a_roll, f"{A.arm} arm rolls the brick")
@@ -520,11 +709,11 @@ def execute_flip(plan: FlipPlan, contexts: dict, render, clock, look) -> None:
         _joint_move(A, render, clock, plan.q_a_out, f"{A.arm} arm backs out", gentle=True)
     finally:
         A._check_clearance = A_check
-    go_home(A, render, clock)
+    _leave_for_home(A, render, clock, back, a_body)
 
     # 5. B turns the rest of the way (at the spot, or on the way down) and sets it down upright
     B.grip_yaw = plan.grip_b
-    spot_hover = plan.set_down + [0, 0, _HOVER_DZ]
+    spot_hover = plan.set_down + plan.hold_offset + [0, 0, _HOVER_DZ]
     if plan.q_b_final is not None:
         turn = plan.q_b_final
         try:
@@ -539,9 +728,5 @@ def execute_flip(plan: FlipPlan, contexts: dict, render, clock, look) -> None:
                             _yawed(B.grip_quat, plan.grip_b), q_init=data.qpos[model.jnt_qposadr[B.joint_ids]].copy(),
                             iters=800)
         _joint_move(B, render, clock, q_h, f"{B.arm} arm turns the brick upright on the way")
-    B.go(render, clock, spot_hover)
-    B.go_oriented(render, clock, spot_hover)
-    B.go_oriented(render, clock, plan.set_down)
-    _hold(model, data, render, clock, B.this_arm, _GRIP_OPEN, 300)
-    B.holding = False
-    B.go(render, clock, spot_hover)
+    # (the camera looking at the brick in B's hand: A's hand camera, backed out, faces it)
+    _set_down_seen(B, render, clock, plan.set_down, _yawed(B.grip_quat, plan.grip_b), look)
