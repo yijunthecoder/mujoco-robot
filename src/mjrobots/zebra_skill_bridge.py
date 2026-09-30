@@ -28,13 +28,14 @@ the brick. Before an arm moves, the other arm is parked at home
 place, right where this arm is going.
 
 Flip note: "flip" (his EnsureUpright -> FlipPart, sent for a brick perception
-reports isn't UPRIGHT) turns the brick upright with both arms and sets it down
-on the table (zebra_flip.py); his tree then picks it normally. Already upright
--> SUCCEEDED at once. The plan is made in a background thread on a snapshot,
-so the viewer and perception keep running (his tree marks a part stale after
-2 s without perception). Planning (~8 s) plus the moves (~25 s) can run past
-his 30 s flip timeout: his tree then sends "flip" again, and that one finds
-the brick upright and succeeds at once.
+reports isn't UPRIGHT) turns the brick upright - with one hand or both - and
+sets it down on the table (zebra_flip.py); his tree then picks it normally.
+Already upright -> SUCCEEDED at once; no safe way to flip it -> FAILED, arms not
+moved. The plan is made in a separate process (zebra_flip.PlanningProcess), so
+the viewer and perception keep running (his tree marks a part stale after 2 s
+without perception) and the planner gets its own CPU core. Planning plus the
+moves can run past his 30 s flip timeout: his tree then sends "flip" again, and
+that one finds the brick upright and succeeds at once.
 
 Coordinate note: per Victor's INTERFACE.md section 2b, every `target` - like
 every perception update - is the brick's body *origin* in the MuJoCo world
@@ -62,10 +63,8 @@ Requires ROS2 sourced first: `source /opt/ros/humble/setup.bash`.
 
 from __future__ import annotations
 
-import copy
 import json
 import queue
-import threading
 
 import mujoco
 import mujoco.viewer
@@ -79,7 +78,7 @@ from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .scatter import UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
 from .stationlite_pick_place import _GRIP_OPEN, _hold
-from .zebra_flip import execute_flip, plan_flip
+from .zebra_flip import PlanningProcess, execute_flip
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
@@ -266,6 +265,9 @@ def run_bridge(
 
     fault_picks = 0  # picks of fault_part seen so far
 
+    # Flips need both arms; their plans are made in this separate process (started once).
+    planner = PlanningProcess(path) if len(arms) == 2 else None
+
     rclpy.init()
     node = ZebraSkillBridge()
     # 0.5s, not the standalone 1s: during a move, IK solves between physics
@@ -336,30 +338,18 @@ def run_bridge(
         return look
 
     def _plan_flip_live(part_id: str, order: list[str]):
-        """plan_flip on a snapshot in a background thread, while the sim, viewer
-        and perception keep running here (the arms are parked, nothing moves)."""
-        snapshot = copy.copy(data)
+        """plan_flip in the planning process, from the state right now, while the sim,
+        viewer and perception keep running here (the arms are parked, nothing moves)."""
         others = [brick_ids[p] for p in ALL_PART_IDS if p != part_id]
-        out = {}
-
-        def work():
-            try:
-                out["plan"] = plan_flip(model, snapshot, brick_ids[part_id], others, order)
-            except Exception as exc:  # handed to the main thread
-                out["error"] = exc
-
-        worker = threading.Thread(target=work, daemon=True)
-        worker.start()
-        while worker.is_alive():
+        pending = planner.start(data, brick_ids[part_id], others, order)
+        while not pending.done():
             if not viewer.is_running():
                 raise RuntimeError("viewer closed while planning the flip")
             executor.spin_once(timeout_sec=0.0)
             sim_step.step(model, data)
             clock.tick()
             render.step()
-        if "error" in out:
-            raise out["error"]
-        return out["plan"]
+        return pending.result()  # re-raises the planner's error (or its process dying)
 
     def _let_go_and_park(part_id: str) -> None:
         """After a failed flip: open both hands (the brick drops where it is and
@@ -530,7 +520,7 @@ def run_bridge(
                                 raise RuntimeError(f"{label} is {lies}: flipping needs both arms (--arm nearest)")
                             go_home(ctx, render, clock)  # the other arm is parked above
                             order = [use, next(a for a in arms if a != use)]
-                            node.get_logger().info(f"{label} is {lies}: planning a two-arm flip ...")
+                            node.get_logger().info(f"{label} is {lies}: planning a flip ...")
                             t0 = data.time  # sim time runs in real time on the viewer, planning included
                             plan, lies = _plan_flip_live(part_id, order)
                             if plan is None:
@@ -577,6 +567,8 @@ def run_bridge(
                             f"for {_BUMP_LOST_S:.0f}s"
                         )
     finally:
+        if planner is not None:
+            planner.close()
         perception.destroy_node()
         node.destroy_node()
         if rclpy.ok():

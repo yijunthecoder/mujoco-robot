@@ -24,14 +24,16 @@ one wrist can make - the turn is shared in the air:
 Which pair each hand holds, how far A rolls and which arm is A were chosen by
 measuring 192 brick poses per case (plan-only; see the README): on its side
 86% can be flipped (split 45+45, else A alone 90), on its end 33%, upside down
-20%. `plan_flip` tries one hand alone first (on its side), then those
-strategies in that order, on a scratch copy of the simulation - planning only,
-nothing moves - and returns the first that works; `execute_flip` then does it
-for real, with physics.
+20%. `plan_flip` tries one hand alone setting it down nearby first (on its
+side), then those strategies in that order, then one hand setting it down
+further away, on a scratch copy of the simulation - planning only, nothing
+moves - and returns the first that works; `execute_flip` then does it for real,
+with physics.
 
-A-rolls-90-then-B-takes-it is the least reliable: B's fingers only fit past A's
-1.25 cm above the brick's middle, and a brick held by its top strip slid out of
-B's fingers on the way down in 4 of 6 physics tests. One hand alone avoids it.
+B only ever grips the brick's middle (`_B_HEIGHTS`): gripping higher lets B's
+fingers fit past A's in more poses (A rolls 90, B takes it), but a brick held by
+its top strip slid out of B's fingers on the way down in 5 of 6 physics tests
+and once live. One hand alone flips most of those instead.
 
 While two hands are near one brick, the 2 cm arm-to-arm rule is relaxed for
 the grippers only ("handover mode"): the arm links must still stay 2 cm apart,
@@ -54,7 +56,7 @@ import numpy as np
 from . import cartesian_control
 from . import zebra_pick_place as zpp
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, move_to_pose, solve_ik_pose
-from .scatter import MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_CLEAR, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, lying
+from .scatter import MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_CLEAR, STACK_XY, TABLE_Z, UPSIDE_DOWN, Zone, lying
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_pick_place import (
     BRICK_HEIGHT, ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _close_and_settle, _oriented_approach,
@@ -67,7 +69,14 @@ _GRIP_Q = np.array([0.0, 2.23, -1.215, 0.0, 0.0, 0.0])  # the pose grip_quat was
 # the stack spot as well as over the middle (a stack may already stand there).
 _HANDOVER_SPOTS = [np.array([x, y, z]) for z in (0.0, 0.04) for x in (0.35, 0.45) for y in (0.0, 0.12, -0.12)]
 _YAW_TURNS = np.radians([0, 30, -30, 60, -60, 90, -90, 180])  # extra turn about vertical at the handover
-_B_HEIGHTS = (0.0, 0.0075, 0.0125)  # B grips this much higher than A: keeps the fingers apart
+# How much higher than A's grip B may grip. Only the middle: 0.75 and 1.25 cm used to be
+# allowed (they keep the four fingers apart), but a brick held by its top strip slid
+# out of B's fingers on the way down - 5 of 6 bricks in physics tests, and seed 1's
+# body live. A brick no plan can grip in the middle isn't flipped (FAILED, left as is).
+_B_HEIGHTS = (0.0,)
+# Set-down spots beyond the ones near the brick: the green zone (where an arm can pick
+# the brick up again and stack it - scatter.Zone), one candidate every this many metres.
+_FAR_SPOT_SPACING = 0.06
 _BACK_OUT = 0.06  # m A's hand backs out along its own fingers after letting go
 _B_APPROACH = 0.08  # m B comes in straight from this far back along its own fingers
 _MIN_LINKS = 0.02  # m arm links apart (as arm_clearance.MIN_ARM_CLEARANCE)
@@ -220,6 +229,7 @@ class _Planner:
         self.obstacles = [g for b in other_bricks for g in self.geo.body(b)]
         self.brick_geoms = self.geo.body(brick_body)
         self.arms_order = arms_order
+        self.zone = Zone.load("either")  # where an arm can pick a brick and stack it
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, brick_body)
         self.name = name
         self.home = model.key("home").id
@@ -292,19 +302,27 @@ class _Planner:
         mujoco.mj_forward(self.model, d)
         return True
 
-    def set_down_spots(self, center, b_side):
-        """Where B may set the brick down upright: where it lay, then spots near it,
-        clear of the other bricks and the stack."""
-        cands = [center[:2]] + [center[:2] + r * np.array([np.cos(a), np.sin(a)])
-                                for r in (0.06, 0.10) for a in np.radians(np.arange(0, 360, 45))]
-        out = []
-        for xy in cands:
-            if np.linalg.norm(xy - STACK_XY) < STACK_CLEAR:
-                continue
-            if any(np.linalg.norm(xy - o) < MIN_BRICK_GAP for o in self.other_xy):
-                continue
-            out.append(np.array([xy[0], xy[1], TABLE_TOP + 0.0192]))
-        return out
+    def set_down_spots(self, center, far=False):
+        """Where the brick may be set down upright: where it lay and spots 6 and 10 cm
+        from it; or with `far`, the rest of the green zone (nearest first, one every
+        _FAR_SPOT_SPACING). Always inside the zone, so an arm can pick it up again and
+        stack it, and clear of the other bricks and the stack. The far spots gave one
+        hand alone 3 more bricks of 6 tried (seeds 3 head, 7 and 8 legs), but searching
+        them all takes ~20 s when none works - so they're tried last (see `plan`)."""
+        def free(xy):
+            return (self.zone.covers(xy) and np.linalg.norm(xy - STACK_XY) >= STACK_CLEAR
+                    and all(np.linalg.norm(xy - o) >= MIN_BRICK_GAP for o in self.other_xy))
+
+        near = [xy for xy in [center[:2]] + [center[:2] + r * np.array([np.cos(a), np.sin(a)])
+                                             for r in (0.06, 0.10) for a in np.radians(np.arange(0, 360, 45))]
+                if free(xy)]
+        spots = near
+        if far:
+            spots = []
+            for xy in sorted(self.zone.cells, key=lambda xy: np.linalg.norm(xy - center[:2])):
+                if free(xy) and all(np.linalg.norm(xy - s) >= _FAR_SPOT_SPACING for s in near + spots):
+                    spots.append(xy)
+        return [np.array([x, y, TABLE_TOP + BRICK_HEIGHT / 2]) for x, y in spots]
 
     # --- A's pick, shared by the strategies ---
     def pick(self, d, cA, Rb0, center, a_axis):
@@ -334,9 +352,10 @@ class _Planner:
         return grip_a, Rgrasp, q_grasp, rel, d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
 
     # --- one hand alone (on its side) ---
-    def attempt_solo(self, lies, Rb0, center, a_side):
+    def attempt_solo(self, lies, Rb0, center, a_side, far=False):
         """A picks it by the ends, rolls its hand the whole 90 deg (the brick is then
-        upright in its fingers), lowers it onto a set-down spot and lets go."""
+        upright in its fingers), lowers it onto a set-down spot (`far`: see
+        set_down_spots) and lets go."""
         cfg = _CASES[lies]
         other = "left" if a_side == "right" else "right"
         d, ctx = self.fresh()
@@ -356,7 +375,7 @@ class _Planner:
                 for gam in _YAW_TURNS:
                     RA = _rot([0, 0, 1.0], gam) @ _rot(fA, sgn * cfg["total"]) @ Rgrasp
                     hold = RA @ off_hand
-                    for spot in self.set_down_spots(center, a_side):
+                    for spot in self.set_down_spots(center, far):
                         d.qpos[:], d.ctrl[:] = after_lift
                         mujoco.mj_forward(self.model, d)
                         hover = spot + hold + [0, 0, _HOVER_DZ]
@@ -493,7 +512,7 @@ class _Planner:
             if q_turn is not None:
                 if not self.joint_path_ok(d, cB, cA.arm, q_b, q_turn, rel=rel_b):
                     continue
-            for spot in self.set_down_spots(center, cB.arm):
+            for spot in self.set_down_spots(center):
                 d.qpos[:], d.ctrl[:] = start_turn
                 self.set_arm(d, cB, q_turn if q_turn is not None else q_b)
                 mujoco.mj_forward(self.model, d)
@@ -513,17 +532,19 @@ class _Planner:
         return None
 
     def plan(self, lies, Rb0, center):
+        """Quick and likely first: one hand setting it down near where it lay (on its
+        side), then the two-hand strategies, then one hand with the far spots (slow when
+        nothing fits: tried last, so a two-hand brick isn't kept waiting ~20 s)."""
         cfg = _CASES[lies]
-        if lies == ON_SIDE:  # one hand alone first: no handover
+        solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies == ON_SIDE else []
+        two = [lambda side, r=r: self.attempt(lies, Rb0, center, side, r) for r in cfg["rolls"]]
+        far = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies == ON_SIDE else []
+        for strategies in (solo, two, far):
             for a_side in self.arms_order:
-                p = self.attempt_solo(lies, Rb0, center, a_side)
-                if p is not None:
-                    return p
-        for a_side in self.arms_order:
-            for roll_a in cfg["rolls"]:
-                p = self.attempt(lies, Rb0, center, a_side, roll_a)
-                if p is not None:
-                    return p
+                for strategy in strategies:
+                    p = strategy(a_side)
+                    if p is not None:
+                        return p
         return None
 
 
@@ -538,6 +559,49 @@ def plan_flip(model, data, brick_body: int, other_bricks: list[int],
     center = data.xpos[brick_body] + R @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
     planner = _Planner(model, data, brick_body, other_bricks, arms_order)
     return planner.plan(lies, R, center), lies
+
+
+_worker_model = _worker_data = None  # in the planning process (see PlanningProcess)
+
+
+def _worker_init(scene_path: str) -> None:
+    global _worker_model, _worker_data
+    _worker_model = mujoco.MjModel.from_xml_path(scene_path)
+    _worker_data = mujoco.MjData(_worker_model)
+
+
+def _worker_plan(state, brick_body, other_bricks, arms_order):
+    qpos, qvel, ctrl = state
+    _worker_data.qpos[:], _worker_data.qvel[:], _worker_data.ctrl[:] = qpos, qvel, ctrl
+    mujoco.mj_forward(_worker_model, _worker_data)
+    return plan_flip(_worker_model, _worker_data, brick_body, other_bricks, arms_order)
+
+
+class PlanningProcess:
+    """plan_flip in a separate process, so it gets its own CPU core. In a thread of a
+    process that also runs the viewer, physics and cameras it shares Python's one
+    running thread with them: seed 1's body took 42 s there against 18 s alone - past
+    zebra_bt's 30 s flip timeout. The process loads the same scene once; each plan
+    sends it only the current state (joint positions/velocities, controls), not the
+    ~90 MB model."""
+
+    def __init__(self, scene_path: str) -> None:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        # spawn, not fork: the parent runs ROS and viewer threads, which a fork can't copy
+        # safely. An executor, not a Pool: if the process dies, the plan raises
+        # (BrokenProcessPool) instead of never finishing.
+        self._pool = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"),
+                                         initializer=_worker_init, initargs=(str(scene_path),))
+
+    def start(self, data, brick_body: int, other_bricks: list[int], arms_order: list[str]):
+        """Start planning from `data`'s current state; returns a Future whose .result()
+        is plan_flip's (plan, how it lies)."""
+        state = (data.qpos.copy(), data.qvel.copy(), data.ctrl.copy())
+        return self._pool.submit(_worker_plan, state, brick_body, list(other_bricks), list(arms_order))
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _handover_check(model, geo: _Geoms, me: str, other: str):
