@@ -10,7 +10,8 @@
 #   bash scripts/run_zebra.sh
 #   bash scripts/run_zebra.sh --arm left      # one arm for everything (default: nearest per brick); extra args go to the bridge
 #   bash scripts/run_zebra.sh --scatter 7     # replay scatter seed 7 (default: new random one)
-#   bash scripts/run_zebra.sh --fixed-start   # bricks in the old fixed spots
+#   bash scripts/run_zebra.sh --upright       # bricks set down upright (default: dropped, any way up)
+#   bash scripts/run_zebra.sh --fixed-start   # bricks upright in the old fixed spots
 
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash

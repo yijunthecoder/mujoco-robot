@@ -51,8 +51,9 @@ press Ctrl+C to stop both.
 $ bash scripts/run_zebra.sh
 ```
 
-The bricks start **scattered**: each at a random spot and angle (upright),
-only where an arm can pick it up and place it on the stack at every angle -
+The bricks start **scattered and dropped**: each is dropped at a random spot,
+so it lands any way up (see "Dropped bricks" below; `--upright` sets them down
+upright instead). The spots are only where an arm can pick it up and place it on the stack at every angle -
 the green area of the arms' reach maps (see Notes below; `src/mjrobots/scatter.py`,
 at least 10 cm apart and 10 cm clear of the stack). Every run is a new
 random scatter, and the first bridge line says which, e.g.
@@ -61,6 +62,7 @@ Replay a scatter by its seed, or start from the old fixed square spots:
 
 ```bash
 $ bash scripts/run_zebra.sh --scatter 7
+$ bash scripts/run_zebra.sh --upright
 $ bash scripts/run_zebra.sh --fixed-start
 ```
 
@@ -88,7 +90,8 @@ than 8.1 cm (median closest 19.5 cm). Right arm alone, in its own area: also
 grip isn't reachable at the stack - it never happened from the fixed square
 spots.
 
-**Drop instead** (`--drop`): each brick is dropped from 15 cm above a random
+**Dropped bricks** (the default; `--upright` for the old upright scatter,
+`--drop` is still accepted): each brick is dropped from 15 cm above a random
 spot with a random tumble and lands however physics lets it - so, like a
 real messy table, usually not upright. Measured over 400 drops: 46% on a long
 side, 21% upside down, 16% on an end, only **17% upright**; all three
@@ -114,7 +117,7 @@ both arms; seed 1 (body on its side) legs placed, body refused 4 times and
 escalated, head skipped - `1 placed, 2 escalated`.
 
 ```bash
-$ bash scripts/run_zebra.sh --drop --scatter 129
+$ bash scripts/run_zebra.sh --scatter 129
 ```
 
 Confirm before moving (for the first real-robot runs): each arm move prints
