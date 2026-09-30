@@ -24,6 +24,13 @@ $ cd ~/ros2_ws && source /opt/ros/humble/setup.bash
 $ colcon build --packages-select build_a_zebra
 ```
 
+This repo itself isn't built with colcon - its scripts run straight from
+here. It can still sit inside a ROS2 workspace: `stationlite/` is the robot
+maker's ROS1 (catkin) description package, which would stop a plain
+`colcon build` with `find_package(catkin REQUIRED)`, so it has an empty
+`COLCON_IGNORE` that tells colcon to skip it (MuJoCo reads its XML and
+meshes directly).
+
 ## How to run
 
 All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
@@ -80,6 +87,35 @@ than 8.1 cm (median closest 19.5 cm). Right arm alone, in its own area: also
 180 deg (same footprint, printed face reversed): from most angles the square
 grip isn't reachable at the stack - it never happened from the fixed square
 spots.
+
+**Drop instead** (`--drop`): each brick is dropped from 15 cm above a random
+spot with a random tumble and lands however physics lets it - so, like a
+real messy table, usually not upright. Measured over 400 drops: 46% on a long
+side, 21% upside down, 16% on an end, only **17% upright**; all three
+upright in 3 of 400 seeds (129, 215, 333). They slide only 1-5 cm, and the
+same seed always lands the same way.
+
+Perception now also says how each brick lies and its angle on the table, in
+two extra fields after z (Victor's parser reads the first five and ignores
+the rest, so his tree runs unchanged):
+
+```
+part,STATUS,x,y,z,LYING,yaw
+```
+
+LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, and yaw the angle in
+degrees (-90..90). The bridge log shows it too, e.g. seed 1's body:
+`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg`. His tree
+decides what to do about it. Only top-down grips exist so far, so if it still sends
+a pick for a brick that isn't upright, the bridge refuses before moving and
+reports `FAILED` with the reason ("body is ON_SIDE - can't grip it from the
+top"). Live with his tree: seed 129 (all upright) 3 placed, 0 escalated,
+both arms; seed 1 (body on its side) legs placed, body refused 4 times and
+escalated, head skipped - `1 placed, 2 escalated`.
+
+```bash
+$ bash scripts/run_zebra.sh --drop --scatter 129
+```
 
 Confirm before moving (for the first real-robot runs): each arm move prints
 every joint's current angle, target, and change (flagging changes over
