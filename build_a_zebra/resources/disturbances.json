@@ -18,12 +18,6 @@
       "probability": 0.0,
       "severity": "minor",
       "description": "Small position jitter from sensor noise, doesn't require re-locating"
-    },
-    {
-      "type": "FLIP",
-      "probability": 0.0,
-      "severity": "major",
-      "description": "Part gets flipped upside down; must be righted before pick"
     }
   ]
 }

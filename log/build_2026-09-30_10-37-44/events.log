@@ -1,0 +1,366 @@
+[0.000000] (-) TimerEvent: {}
+[0.000302] (-) JobUnselected: {'identifier': 'stationlite'}
+[0.000348] (build_a_zebra) JobQueued: {'identifier': 'build_a_zebra', 'dependencies': OrderedDict()}
+[0.001198] (build_a_zebra) JobStarted: {'identifier': 'build_a_zebra'}
+[0.017042] (build_a_zebra) JobProgress: {'identifier': 'build_a_zebra', 'progress': 'cmake'}
+[0.017965] (build_a_zebra) JobProgress: {'identifier': 'build_a_zebra', 'progress': 'build'}
+[0.019205] (build_a_zebra) Command: {'cmd': ['/usr/bin/cmake', '--build', '/home/user/mujoco-project/build/build_a_zebra', '--', '-j8', '-l8'], 'cwd': '/home/user/mujoco-project/build/build_a_zebra', 'env': OrderedDict([('LESSOPEN', '| /usr/bin/lesspipe %s'), ('USER', 'user'), ('SHLVL', '1'), ('LIBGL_ALWAYS_SOFTWARE', '1'), ('LD_LIBRARY_PATH', '/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('HOME', '/home/user'), ('OLDPWD', '/home/user/mujoco-project'), ('ROS_PYTHON_VERSION', '3'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('WSL_DISTRO_NAME', 'Ubuntu-22.04'), ('WAYLAND_DISPLAY', 'wayland-0'), ('COLCON_PREFIX_PATH', '/home/user/mujoco-project/install'), ('ROS_DISTRO', 'humble'), ('LOGNAME', 'user'), ('NAME', 'VictorTang'), ('WSL_INTEROP', '/run/WSL/38704_interop'), ('PULSE_SERVER', 'unix:/mnt/wslg/PulseServer'), ('_', '/home/user/.local/bin/colcon'), ('ROS_VERSION', '2'), ('TERM', 'xterm-256color'), ('ROS_LOCALHOST_ONLY', '0'), ('PATH', '/home/user/.local/bin:/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/lib/wsl/lib:/mnt/c/Users/65914/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand:/mnt/c/Users/65914/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli:/mnt/c/Windows/system32:/mnt/c/Windows:/mnt/c/Windows/System32/Wbem:/mnt/c/Windows/System32/WindowsPowerShell/v1.0/:/mnt/c/Windows/System32/OpenSSH/:/mnt/c/Program Files (x86)/NVIDIA Corporation/PhysX/Common:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS:/mnt/c/WINDOWS/System32/Wbem:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/:/mnt/c/WINDOWS/System32/OpenSSH/:/mnt/c/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/:/mnt/c/Program Files/dotnet/:/mnt/c/Users/65914/.local/bin:/mnt/c/Users/65914/AppData/Local/Microsoft/WindowsApps:/mnt/c/Users/65914/AppData/Local/Programs/Microsoft VS Code/bin:/mnt/c/Users/65914/AppData/Local/GitHubDesktop/bin:/mnt/c/Flutter/flutter/bin:/mnt/c/Users/65914/ApplData/Local/Pub/Cache/bin:/mnt/c/Program Files/Git/cmd/:/mnt/c/Program Files/Git/bin/:/mnt/c/Users/65914/AppData/Local/Pub/Cache/bin:/mnt/c/Users/65914/.vscode/extensions/ms-python.debugpy-2026.6.0-win32-x64/bundled/scripts/noConfigScripts:/snap/bin'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('DISPLAY', ':0'), ('LANG', 'en_US.UTF-8'), ('LS_COLORS', 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:'), ('AMENT_PREFIX_PATH', '/home/user/mujoco-project/install/build_a_zebra:/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('PWD', '/home/user/mujoco-project/build/build_a_zebra'), ('XDG_DATA_DIRS', '/usr/local/share:/usr/share:/var/lib/snapd/desktop'), ('PYTHONPATH', '/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('COLCON', '1'), ('WSL2_GUI_APPS_ENABLED', '1'), ('HOSTTYPE', 'x86_64'), ('CMAKE_PREFIX_PATH', '/home/user/mujoco-project/install/build_a_zebra:/opt/ros/humble'), ('WSLENV', '')]), 'shell': False}
+[0.099748] (-) TimerEvent: {}
+[0.107403] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target gtest\x1b[0m\n'}
+[0.107776] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target gtest_main\x1b[0m\n'}
+[0.110893] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target zebra_bt_node\x1b[0m\n'}
+[0.151050] (build_a_zebra) StdoutLine: {'line': b'[ 21%] Built target gtest_main\n'}
+[0.151749] (build_a_zebra) StdoutLine: {'line': b'[ 21%] Built target gtest\n'}
+[0.167960] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target task_model_test\x1b[0m\n'}
+[0.174421] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target world_model_test\x1b[0m\n'}
+[0.175486] (build_a_zebra) StdoutLine: {'line': b'\x1b[35m\x1b[1mConsolidate compiler generated dependencies of target recovery_manager_test\x1b[0m\n'}
+[0.188565] (build_a_zebra) StdoutLine: {'line': b'[ 26%] \x1b[32mBuilding CXX object CMakeFiles/zebra_bt_node.dir/src/main.cpp.o\x1b[0m\n'}
+[0.199942] (-) TimerEvent: {}
+[0.202444] (build_a_zebra) StdoutLine: {'line': b'[ 31%] \x1b[32mBuilding CXX object CMakeFiles/zebra_bt_node.dir/src/world_model.cpp.o\x1b[0m\n'}
+[0.206332] (build_a_zebra) StdoutLine: {'line': b'[ 36%] \x1b[32mBuilding CXX object CMakeFiles/zebra_bt_node.dir/src/disturbance_generator.cpp.o\x1b[0m\n'}
+[0.212193] (build_a_zebra) StdoutLine: {'line': b'[ 52%] Built target recovery_manager_test\n'}
+[0.228441] (build_a_zebra) StdoutLine: {'line': b'[ 57%] \x1b[32mBuilding CXX object CMakeFiles/world_model_test.dir/test/world_model_test.cpp.o\x1b[0m\n'}
+[0.238631] (build_a_zebra) StdoutLine: {'line': b'[ 73%] Built target task_model_test\n'}
+[0.240525] (build_a_zebra) StdoutLine: {'line': b'[ 78%] \x1b[32mBuilding CXX object CMakeFiles/world_model_test.dir/src/world_model.cpp.o\x1b[0m\n'}
+[0.300687] (-) TimerEvent: {}
+[0.401972] (-) TimerEvent: {}
+[0.502536] (-) TimerEvent: {}
+[0.603221] (-) TimerEvent: {}
+[0.703909] (-) TimerEvent: {}
+[0.804630] (-) TimerEvent: {}
+[0.905832] (-) TimerEvent: {}
+[1.006501] (-) TimerEvent: {}
+[1.107086] (-) TimerEvent: {}
+[1.207781] (-) TimerEvent: {}
+[1.308388] (-) TimerEvent: {}
+[1.409071] (-) TimerEvent: {}
+[1.509985] (-) TimerEvent: {}
+[1.610650] (-) TimerEvent: {}
+[1.711373] (-) TimerEvent: {}
+[1.812232] (-) TimerEvent: {}
+[1.912832] (-) TimerEvent: {}
+[2.013535] (-) TimerEvent: {}
+[2.114100] (-) TimerEvent: {}
+[2.214669] (-) TimerEvent: {}
+[2.315365] (-) TimerEvent: {}
+[2.415986] (-) TimerEvent: {}
+[2.516493] (-) TimerEvent: {}
+[2.617137] (-) TimerEvent: {}
+[2.717732] (-) TimerEvent: {}
+[2.818920] (-) TimerEvent: {}
+[2.919603] (-) TimerEvent: {}
+[3.020258] (-) TimerEvent: {}
+[3.121053] (-) TimerEvent: {}
+[3.221819] (-) TimerEvent: {}
+[3.322641] (-) TimerEvent: {}
+[3.425099] (-) TimerEvent: {}
+[3.526916] (-) TimerEvent: {}
+[3.629467] (-) TimerEvent: {}
+[3.730673] (-) TimerEvent: {}
+[3.831258] (-) TimerEvent: {}
+[3.931892] (-) TimerEvent: {}
+[4.032505] (-) TimerEvent: {}
+[4.133363] (-) TimerEvent: {}
+[4.236480] (-) TimerEvent: {}
+[4.337815] (-) TimerEvent: {}
+[4.438425] (-) TimerEvent: {}
+[4.538984] (-) TimerEvent: {}
+[4.639592] (-) TimerEvent: {}
+[4.740251] (-) TimerEvent: {}
+[4.841159] (-) TimerEvent: {}
+[4.944272] (-) TimerEvent: {}
+[5.047010] (-) TimerEvent: {}
+[5.147714] (-) TimerEvent: {}
+[5.248427] (-) TimerEvent: {}
+[5.349038] (-) TimerEvent: {}
+[5.449646] (-) TimerEvent: {}
+[5.550316] (-) TimerEvent: {}
+[5.650987] (-) TimerEvent: {}
+[5.751626] (-) TimerEvent: {}
+[5.852307] (-) TimerEvent: {}
+[5.962128] (-) TimerEvent: {}
+[6.062697] (-) TimerEvent: {}
+[6.163288] (-) TimerEvent: {}
+[6.264428] (-) TimerEvent: {}
+[6.366317] (-) TimerEvent: {}
+[6.467816] (-) TimerEvent: {}
+[6.569637] (-) TimerEvent: {}
+[6.670661] (-) TimerEvent: {}
+[6.771332] (-) TimerEvent: {}
+[6.871963] (-) TimerEvent: {}
+[6.972662] (-) TimerEvent: {}
+[7.073285] (-) TimerEvent: {}
+[7.173945] (-) TimerEvent: {}
+[7.274625] (-) TimerEvent: {}
+[7.375786] (-) TimerEvent: {}
+[7.476768] (-) TimerEvent: {}
+[7.577467] (-) TimerEvent: {}
+[7.678436] (-) TimerEvent: {}
+[7.781083] (-) TimerEvent: {}
+[7.881678] (-) TimerEvent: {}
+[7.986381] (-) TimerEvent: {}
+[8.086961] (-) TimerEvent: {}
+[8.187641] (-) TimerEvent: {}
+[8.288223] (-) TimerEvent: {}
+[8.388827] (-) TimerEvent: {}
+[8.489433] (-) TimerEvent: {}
+[8.590037] (-) TimerEvent: {}
+[8.690764] (-) TimerEvent: {}
+[8.798689] (-) TimerEvent: {}
+[8.899377] (-) TimerEvent: {}
+[9.000294] (-) TimerEvent: {}
+[9.102061] (-) TimerEvent: {}
+[9.202695] (-) TimerEvent: {}
+[9.306862] (-) TimerEvent: {}
+[9.408700] (-) TimerEvent: {}
+[9.509618] (-) TimerEvent: {}
+[9.611736] (-) TimerEvent: {}
+[9.712326] (-) TimerEvent: {}
+[9.814496] (-) TimerEvent: {}
+[9.915547] (-) TimerEvent: {}
+[10.017118] (-) TimerEvent: {}
+[10.117934] (-) TimerEvent: {}
+[10.218503] (-) TimerEvent: {}
+[10.319072] (-) TimerEvent: {}
+[10.419614] (-) TimerEvent: {}
+[10.520152] (-) TimerEvent: {}
+[10.620723] (-) TimerEvent: {}
+[10.721293] (-) TimerEvent: {}
+[10.822089] (-) TimerEvent: {}
+[10.922693] (-) TimerEvent: {}
+[11.023310] (-) TimerEvent: {}
+[11.123870] (-) TimerEvent: {}
+[11.224413] (-) TimerEvent: {}
+[11.325035] (-) TimerEvent: {}
+[11.425661] (-) TimerEvent: {}
+[11.526289] (-) TimerEvent: {}
+[11.626890] (-) TimerEvent: {}
+[11.727575] (-) TimerEvent: {}
+[11.833660] (-) TimerEvent: {}
+[11.934296] (-) TimerEvent: {}
+[12.038021] (-) TimerEvent: {}
+[12.138655] (-) TimerEvent: {}
+[12.239241] (-) TimerEvent: {}
+[12.339809] (-) TimerEvent: {}
+[12.440480] (-) TimerEvent: {}
+[12.541076] (-) TimerEvent: {}
+[12.641696] (-) TimerEvent: {}
+[12.742411] (-) TimerEvent: {}
+[12.843055] (-) TimerEvent: {}
+[12.943682] (-) TimerEvent: {}
+[13.044315] (-) TimerEvent: {}
+[13.144897] (-) TimerEvent: {}
+[13.245471] (-) TimerEvent: {}
+[13.346091] (-) TimerEvent: {}
+[13.446741] (-) TimerEvent: {}
+[13.547338] (-) TimerEvent: {}
+[13.648064] (-) TimerEvent: {}
+[13.748860] (-) TimerEvent: {}
+[13.849785] (-) TimerEvent: {}
+[13.950585] (-) TimerEvent: {}
+[14.051867] (-) TimerEvent: {}
+[14.152948] (-) TimerEvent: {}
+[14.254213] (-) TimerEvent: {}
+[14.354896] (-) TimerEvent: {}
+[14.455513] (-) TimerEvent: {}
+[14.556378] (-) TimerEvent: {}
+[14.657049] (-) TimerEvent: {}
+[14.757719] (-) TimerEvent: {}
+[14.858371] (-) TimerEvent: {}
+[14.959057] (-) TimerEvent: {}
+[15.059748] (-) TimerEvent: {}
+[15.160314] (-) TimerEvent: {}
+[15.260844] (-) TimerEvent: {}
+[15.361390] (-) TimerEvent: {}
+[15.462033] (-) TimerEvent: {}
+[15.562529] (-) TimerEvent: {}
+[15.663120] (-) TimerEvent: {}
+[15.763693] (-) TimerEvent: {}
+[15.864333] (-) TimerEvent: {}
+[15.964928] (-) TimerEvent: {}
+[16.065646] (-) TimerEvent: {}
+[16.166247] (-) TimerEvent: {}
+[16.266867] (-) TimerEvent: {}
+[16.367517] (-) TimerEvent: {}
+[16.469327] (-) TimerEvent: {}
+[16.570077] (-) TimerEvent: {}
+[16.670729] (-) TimerEvent: {}
+[16.771353] (-) TimerEvent: {}
+[16.871953] (-) TimerEvent: {}
+[16.972494] (-) TimerEvent: {}
+[17.073622] (-) TimerEvent: {}
+[17.174449] (-) TimerEvent: {}
+[17.275182] (-) TimerEvent: {}
+[17.376108] (-) TimerEvent: {}
+[17.477482] (-) TimerEvent: {}
+[17.578264] (-) TimerEvent: {}
+[17.678959] (-) TimerEvent: {}
+[17.779589] (-) TimerEvent: {}
+[17.880186] (-) TimerEvent: {}
+[17.980796] (-) TimerEvent: {}
+[18.081338] (-) TimerEvent: {}
+[18.182066] (-) TimerEvent: {}
+[18.282632] (-) TimerEvent: {}
+[18.383296] (-) TimerEvent: {}
+[18.483942] (-) TimerEvent: {}
+[18.584537] (-) TimerEvent: {}
+[18.685112] (-) TimerEvent: {}
+[18.785622] (-) TimerEvent: {}
+[18.910866] (-) TimerEvent: {}
+[19.011634] (-) TimerEvent: {}
+[19.112635] (-) TimerEvent: {}
+[19.213083] (-) TimerEvent: {}
+[19.313643] (-) TimerEvent: {}
+[19.414217] (-) TimerEvent: {}
+[19.514747] (-) TimerEvent: {}
+[19.615339] (-) TimerEvent: {}
+[19.715973] (-) TimerEvent: {}
+[19.816607] (-) TimerEvent: {}
+[19.917197] (-) TimerEvent: {}
+[20.017749] (-) TimerEvent: {}
+[20.118190] (-) TimerEvent: {}
+[20.218644] (-) TimerEvent: {}
+[20.319134] (-) TimerEvent: {}
+[20.419645] (-) TimerEvent: {}
+[20.520200] (-) TimerEvent: {}
+[20.620669] (-) TimerEvent: {}
+[20.721144] (-) TimerEvent: {}
+[20.821657] (-) TimerEvent: {}
+[20.922246] (-) TimerEvent: {}
+[21.022688] (-) TimerEvent: {}
+[21.123199] (-) TimerEvent: {}
+[21.223693] (-) TimerEvent: {}
+[21.324133] (-) TimerEvent: {}
+[21.424573] (-) TimerEvent: {}
+[21.525157] (-) TimerEvent: {}
+[21.625648] (-) TimerEvent: {}
+[21.726227] (-) TimerEvent: {}
+[21.826837] (-) TimerEvent: {}
+[21.927475] (-) TimerEvent: {}
+[22.028069] (-) TimerEvent: {}
+[22.128676] (-) TimerEvent: {}
+[22.229216] (-) TimerEvent: {}
+[22.329788] (-) TimerEvent: {}
+[22.430463] (-) TimerEvent: {}
+[22.531155] (-) TimerEvent: {}
+[22.631638] (-) TimerEvent: {}
+[22.732075] (-) TimerEvent: {}
+[22.832612] (-) TimerEvent: {}
+[22.933088] (-) TimerEvent: {}
+[23.033689] (-) TimerEvent: {}
+[23.134150] (-) TimerEvent: {}
+[23.234670] (-) TimerEvent: {}
+[23.335158] (-) TimerEvent: {}
+[23.435737] (-) TimerEvent: {}
+[23.536318] (-) TimerEvent: {}
+[23.636860] (-) TimerEvent: {}
+[23.737425] (-) TimerEvent: {}
+[23.838061] (-) TimerEvent: {}
+[23.994043] (-) TimerEvent: {}
+[24.094524] (-) TimerEvent: {}
+[24.194964] (-) TimerEvent: {}
+[24.295422] (-) TimerEvent: {}
+[24.395848] (-) TimerEvent: {}
+[24.496402] (-) TimerEvent: {}
+[24.596899] (-) TimerEvent: {}
+[24.606701] (build_a_zebra) StdoutLine: {'line': b'[ 84%] \x1b[32m\x1b[1mLinking CXX executable world_model_test\x1b[0m\n'}
+[24.697067] (-) TimerEvent: {}
+[24.797490] (-) TimerEvent: {}
+[24.898029] (-) TimerEvent: {}
+[24.998530] (-) TimerEvent: {}
+[25.099018] (-) TimerEvent: {}
+[25.199479] (-) TimerEvent: {}
+[25.299962] (-) TimerEvent: {}
+[25.387431] (build_a_zebra) StdoutLine: {'line': b'[ 84%] Built target world_model_test\n'}
+[25.400179] (-) TimerEvent: {}
+[25.500729] (-) TimerEvent: {}
+[25.601162] (-) TimerEvent: {}
+[25.701699] (-) TimerEvent: {}
+[25.802188] (-) TimerEvent: {}
+[25.902730] (-) TimerEvent: {}
+[26.003268] (-) TimerEvent: {}
+[26.103682] (-) TimerEvent: {}
+[26.204193] (-) TimerEvent: {}
+[26.304717] (-) TimerEvent: {}
+[26.405261] (-) TimerEvent: {}
+[26.505866] (-) TimerEvent: {}
+[26.606358] (-) TimerEvent: {}
+[26.706776] (-) TimerEvent: {}
+[26.807256] (-) TimerEvent: {}
+[26.907706] (-) TimerEvent: {}
+[27.008160] (-) TimerEvent: {}
+[27.108605] (-) TimerEvent: {}
+[27.209190] (-) TimerEvent: {}
+[27.309700] (-) TimerEvent: {}
+[27.410186] (-) TimerEvent: {}
+[27.510745] (-) TimerEvent: {}
+[27.611610] (-) TimerEvent: {}
+[27.712676] (-) TimerEvent: {}
+[27.814197] (-) TimerEvent: {}
+[27.914669] (-) TimerEvent: {}
+[28.015179] (-) TimerEvent: {}
+[28.115568] (-) TimerEvent: {}
+[28.216121] (-) TimerEvent: {}
+[28.316582] (-) TimerEvent: {}
+[28.417059] (-) TimerEvent: {}
+[28.517555] (-) TimerEvent: {}
+[28.618033] (-) TimerEvent: {}
+[28.718474] (-) TimerEvent: {}
+[28.818954] (-) TimerEvent: {}
+[28.919520] (-) TimerEvent: {}
+[29.019968] (-) TimerEvent: {}
+[29.120499] (-) TimerEvent: {}
+[29.221208] (-) TimerEvent: {}
+[29.322145] (-) TimerEvent: {}
+[29.422884] (-) TimerEvent: {}
+[29.523424] (-) TimerEvent: {}
+[29.623896] (-) TimerEvent: {}
+[29.724439] (-) TimerEvent: {}
+[29.825093] (-) TimerEvent: {}
+[29.925498] (-) TimerEvent: {}
+[30.025958] (-) TimerEvent: {}
+[30.031884] (<colcon_parallel_executor.executor.parallel.ParallelExecutorExtension object at 0x7d1c1e0f46d0>) ParallelStatus: {'processing': ('build_a_zebra',)}
+[30.126128] (-) TimerEvent: {}
+[30.137840] (build_a_zebra) StdoutLine: {'line': b'[ 89%] \x1b[32m\x1b[1mLinking CXX executable zebra_bt_node\x1b[0m\n'}
+[30.226301] (-) TimerEvent: {}
+[30.326807] (-) TimerEvent: {}
+[30.428152] (-) TimerEvent: {}
+[30.528801] (-) TimerEvent: {}
+[30.629321] (-) TimerEvent: {}
+[30.730004] (-) TimerEvent: {}
+[30.830625] (-) TimerEvent: {}
+[30.931080] (-) TimerEvent: {}
+[31.031509] (-) TimerEvent: {}
+[31.132024] (-) TimerEvent: {}
+[31.229535] (build_a_zebra) StdoutLine: {'line': b'[100%] Built target zebra_bt_node\n'}
+[31.232274] (-) TimerEvent: {}
+[31.240171] (build_a_zebra) CommandEnded: {'returncode': 0}
+[31.242126] (build_a_zebra) JobProgress: {'identifier': 'build_a_zebra', 'progress': 'install'}
+[31.252396] (build_a_zebra) Command: {'cmd': ['/usr/bin/cmake', '--install', '/home/user/mujoco-project/build/build_a_zebra'], 'cwd': '/home/user/mujoco-project/build/build_a_zebra', 'env': OrderedDict([('LESSOPEN', '| /usr/bin/lesspipe %s'), ('USER', 'user'), ('SHLVL', '1'), ('LIBGL_ALWAYS_SOFTWARE', '1'), ('LD_LIBRARY_PATH', '/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib'), ('HOME', '/home/user'), ('OLDPWD', '/home/user/mujoco-project'), ('ROS_PYTHON_VERSION', '3'), ('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus'), ('WSL_DISTRO_NAME', 'Ubuntu-22.04'), ('WAYLAND_DISPLAY', 'wayland-0'), ('COLCON_PREFIX_PATH', '/home/user/mujoco-project/install'), ('ROS_DISTRO', 'humble'), ('LOGNAME', 'user'), ('NAME', 'VictorTang'), ('WSL_INTEROP', '/run/WSL/38704_interop'), ('PULSE_SERVER', 'unix:/mnt/wslg/PulseServer'), ('_', '/home/user/.local/bin/colcon'), ('ROS_VERSION', '2'), ('TERM', 'xterm-256color'), ('ROS_LOCALHOST_ONLY', '0'), ('PATH', '/home/user/.local/bin:/opt/ros/humble/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/lib/wsl/lib:/mnt/c/Users/65914/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand:/mnt/c/Users/65914/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli:/mnt/c/Windows/system32:/mnt/c/Windows:/mnt/c/Windows/System32/Wbem:/mnt/c/Windows/System32/WindowsPowerShell/v1.0/:/mnt/c/Windows/System32/OpenSSH/:/mnt/c/Program Files (x86)/NVIDIA Corporation/PhysX/Common:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS:/mnt/c/WINDOWS/System32/Wbem:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/:/mnt/c/WINDOWS/System32/OpenSSH/:/mnt/c/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/:/mnt/c/Program Files/dotnet/:/mnt/c/Users/65914/.local/bin:/mnt/c/Users/65914/AppData/Local/Microsoft/WindowsApps:/mnt/c/Users/65914/AppData/Local/Programs/Microsoft VS Code/bin:/mnt/c/Users/65914/AppData/Local/GitHubDesktop/bin:/mnt/c/Flutter/flutter/bin:/mnt/c/Users/65914/ApplData/Local/Pub/Cache/bin:/mnt/c/Program Files/Git/cmd/:/mnt/c/Program Files/Git/bin/:/mnt/c/Users/65914/AppData/Local/Pub/Cache/bin:/mnt/c/Users/65914/.vscode/extensions/ms-python.debugpy-2026.6.0-win32-x64/bundled/scripts/noConfigScripts:/snap/bin'), ('XDG_RUNTIME_DIR', '/run/user/1000'), ('DISPLAY', ':0'), ('LANG', 'en_US.UTF-8'), ('LS_COLORS', 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:'), ('AMENT_PREFIX_PATH', '/home/user/mujoco-project/install/build_a_zebra:/opt/ros/humble'), ('SHELL', '/bin/bash'), ('LESSCLOSE', '/usr/bin/lesspipe %s %s'), ('PWD', '/home/user/mujoco-project/build/build_a_zebra'), ('XDG_DATA_DIRS', '/usr/local/share:/usr/share:/var/lib/snapd/desktop'), ('PYTHONPATH', '/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages'), ('COLCON', '1'), ('WSL2_GUI_APPS_ENABLED', '1'), ('HOSTTYPE', 'x86_64'), ('CMAKE_PREFIX_PATH', '/home/user/mujoco-project/install/build_a_zebra:/opt/ros/humble'), ('WSLENV', '')]), 'shell': False}
+[31.259523] (build_a_zebra) StdoutLine: {'line': b'-- Install configuration: ""\n'}
+[31.259989] (build_a_zebra) StdoutLine: {'line': b'-- Installing: /home/user/mujoco-project/install/build_a_zebra/lib/build_a_zebra/zebra_bt_node\n'}
+[31.285559] (build_a_zebra) StdoutLine: {'line': b'-- Set runtime path of "/home/user/mujoco-project/install/build_a_zebra/lib/build_a_zebra/zebra_bt_node" to ""\n'}
+[31.285751] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/trees\n'}
+[31.286020] (build_a_zebra) StdoutLine: {'line': b'-- Installing: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/trees/zebra_tree.xml\n'}
+[31.286094] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/resources\n'}
+[31.286151] (build_a_zebra) StdoutLine: {'line': b'-- Installing: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/resources/disturbances.json\n'}
+[31.286796] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/resources/bom.json\n'}
+[31.286975] (build_a_zebra) StdoutLine: {'line': b'-- Installing: /home/user/mujoco-project/install/build_a_zebra/lib/build_a_zebra/mujoco_test_executor.py\n'}
+[31.287291] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/ament_index/resource_index/package_run_dependencies/build_a_zebra\n'}
+[31.287595] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/ament_index/resource_index/parent_prefix_path/build_a_zebra\n'}
+[31.287747] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/environment/ament_prefix_path.sh\n'}
+[31.287888] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/environment/ament_prefix_path.dsv\n'}
+[31.288161] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/environment/path.sh\n'}
+[31.288228] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/environment/path.dsv\n'}
+[31.288275] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/local_setup.bash\n'}
+[31.288325] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/local_setup.sh\n'}
+[31.288377] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/local_setup.zsh\n'}
+[31.288428] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/local_setup.dsv\n'}
+[31.288473] (build_a_zebra) StdoutLine: {'line': b'-- Installing: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/package.dsv\n'}
+[31.288893] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/ament_index/resource_index/packages/build_a_zebra\n'}
+[31.289303] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/cmake/build_a_zebraConfig.cmake\n'}
+[31.289576] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/cmake/build_a_zebraConfig-version.cmake\n'}
+[31.289664] (build_a_zebra) StdoutLine: {'line': b'-- Up-to-date: /home/user/mujoco-project/install/build_a_zebra/share/build_a_zebra/package.xml\n'}
+[31.291585] (build_a_zebra) CommandEnded: {'returncode': 0}
+[31.310413] (build_a_zebra) JobEnded: {'identifier': 'build_a_zebra', 'rc': 0}
+[31.311441] (-) EventReactorShutdown: {}

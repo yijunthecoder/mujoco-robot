@@ -111,9 +111,6 @@ class MujocoExecutor(Node):
             time.sleep(0.01)
 
         # --- DIAGNOSTIC: where did the gripper end up? ---
-        # Prints the world position of the gripper body after each move.
-        # Use these numbers to set the brick positions in scene.xml so
-        # the fingers actually meet the brick.
         for name in ("left_linkgripper", "right_linkgripper",
                      "left_griperlj_link1", "left_griperlj_link2",
                      "right_griperlj_link1", "right_griperlj_link2"):
@@ -140,6 +137,49 @@ class MujocoExecutor(Node):
         return count
 
     # ------------------------------------------------------------------
+    # Flip: rotate the part so its studs point up.
+    # Sim-only: directly sets the free joint quaternion.
+    # ------------------------------------------------------------------
+    def _do_flip(self, part_id):
+        # Find the body
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, part_id)
+        if body_id < 0:
+            body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, f"zebra_{part_id}")
+        if body_id < 0:
+            self.get_logger().error(f"flip: unknown body '{part_id}'")
+            return False
+
+        # Find the free joint on that body
+        joint_id = -1
+        for j in range(self.model.njnt):
+            if (self.model.jnt_bodyid[j] == body_id and
+                    self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE):
+                joint_id = j
+                break
+        if joint_id < 0:
+            self.get_logger().error(
+                f"flip: no free joint on '{part_id}' (welded to world?)")
+            return False
+
+        qpos_adr = self.model.jnt_qposadr[joint_id]
+
+        # Step the sim a bit for realism
+        self._drive([], [], [], [], seconds=0.3)
+
+        # Set the quaternion to (w=1, x=0, y=0, z=0) — identity = upright.
+        # If your scene.xml defines "upright" differently, adjust here.
+        self.data.qpos[qpos_adr + 3] = 1.0   # qw
+        self.data.qpos[qpos_adr + 4] = 0.0   # qx
+        self.data.qpos[qpos_adr + 5] = 0.0   # qy
+        self.data.qpos[qpos_adr + 6] = 0.0   # qz
+        mujoco.mj_forward(self.model, self.data)
+
+        self.get_logger().info(f"flip: {part_id} rotated to upright")
+        self._drive([], [], [], [], seconds=0.5)
+        return True
+
+    # ------------------------------------------------------------------
     # ROS: incoming commands
     # ------------------------------------------------------------------
     def on_command(self, msg: String):
@@ -162,13 +202,13 @@ class MujocoExecutor(Node):
 
         self.get_logger().info(f"Received {command_id}: {skill} {part_id}")
         threading.Thread(
-            target=self._execute, args=(command_id, skill), daemon=True
+            target=self._execute, args=(command_id, skill, part_id), daemon=True
         ).start()
 
     # ------------------------------------------------------------------
     # The actual pick / place sequences
     # ------------------------------------------------------------------
-    def _execute(self, command_id, skill):
+    def _execute(self, command_id, skill, part_id):
         try:
             if skill == "pick":
                 # Approach from above with fingers open
@@ -200,6 +240,10 @@ class MujocoExecutor(Node):
                 self._drive(self.arm_ids_r, self.gripper_ids_r,
                             R_PLACE, GRIP_CLOSED, seconds=0.6)
                 self._drive(self.arm_ids_r, self.gripper_ids_r, R_LIFT, GRIP_CLOSED)
+            elif skill == "flip":
+                if not self._do_flip(part_id):
+                    self._report(command_id, "FAILED", "flip failed")
+                    return
             else:
                 self.get_logger().warn(f"Unknown skill '{skill}'")
                 self._report(command_id, "FAILED", f"unknown skill {skill}")
@@ -226,10 +270,30 @@ class MujocoExecutor(Node):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def main():
-    model = mujoco.MjModel.from_xml_path("stationlite_mujoco/scene.xml")
+def main():    
+    model = mujoco.MjModel.from_xml_path(
+        "install/build_a_zebra/share/build_a_zebra/stationlite_mujoco/scene.xml")
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
+
+    # --- TEMP DEBUG: print initial qpos of every zebra part ---
+    print("\n=== INITIAL PART POSES ===")
+    for i in range(model.nbody):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i) or ""
+        if not name.startswith("zebra_"):
+            continue
+        for j in range(model.njnt):
+            if model.jnt_bodyid[j] != i:
+                continue
+            if model.jnt_type[j] != mujoco.mjtJoint.mjJNT_FREE:
+                continue
+            q = model.jnt_qposadr[j]
+            print(f"  {name}: "
+                  f"pos=({data.qpos[q]:.3f}, {data.qpos[q+1]:.3f}, {data.qpos[q+2]:.3f}) "
+                  f"quat=({data.qpos[q+3]:.3f}, {data.qpos[q+4]:.3f}, "
+                  f"{data.qpos[q+5]:.3f}, {data.qpos[q+6]:.3f})")
+    print("==========================\n")
+    # --- END TEMP DEBUG ---
 
     rclpy.init()
 

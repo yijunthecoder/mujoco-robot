@@ -26,7 +26,7 @@ namespace zebra_bt
     ESCALATED   // Recovery gave up automatically; needs a human now | Enum 6
   };
 
-enum class Orientation { UNKNOWN, UPRIGHT, UPSIDE_DOWN, ON_SIDE, ON_END };
+  enum class Orientation { UNKNOWN, UPRIGHT, UPSIDE_DOWN, ON_SIDE, ON_END };
 
   struct PartState
   {
