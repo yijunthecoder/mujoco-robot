@@ -22,3 +22,6 @@ venv/
 
 # OS
 .DS_Store
+build/
+install/
+log/

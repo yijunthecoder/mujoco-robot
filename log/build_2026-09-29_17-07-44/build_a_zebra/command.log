@@ -1,6 +1,0 @@
-Invoking command in '/home/user/mujoco-project/build/build_a_zebra': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/user/mujoco-project/build_a_zebra -DCMAKE_INSTALL_PREFIX=/home/user/mujoco-project/install/build_a_zebra
-Invoked command in '/home/user/mujoco-project/build/build_a_zebra' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake /home/user/mujoco-project/build_a_zebra -DCMAKE_INSTALL_PREFIX=/home/user/mujoco-project/install/build_a_zebra
-Invoking command in '/home/user/mujoco-project/build/build_a_zebra': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/user/mujoco-project/build/build_a_zebra -- -j8 -l8
-Invoked command in '/home/user/mujoco-project/build/build_a_zebra' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /home/user/mujoco-project/build/build_a_zebra -- -j8 -l8
-Invoking command in '/home/user/mujoco-project/build/build_a_zebra': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/user/mujoco-project/build/build_a_zebra
-Invoked command in '/home/user/mujoco-project/build/build_a_zebra' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /home/user/mujoco-project/build/build_a_zebra
