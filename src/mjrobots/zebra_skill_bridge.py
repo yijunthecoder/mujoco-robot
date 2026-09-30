@@ -66,7 +66,7 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .scatter import Zone, arm_bases, choose_arm, describe, scatter_bricks
+from .scatter import UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
@@ -193,13 +193,18 @@ def run_bridge(
     knock_placed: str | None = None,
     knock_later: str | None = None,
     scatter_seed: int | None = None,
+    drop: bool = False,
 ) -> None:
     """`arm` is "nearest" (each brick picked by the arm nearest to it, see
     the module docstring) or "left"/"right" (that arm does everything).
 
     `scatter_seed`, if given, starts the bricks at random spots and angles
     (upright) in the arms' measured reach zone instead of their fixed square
-    spots - see scatter.py. Same seed, same scatter.
+    spots - see scatter.py. Same seed, same scatter. With `drop`, they're
+    dropped instead (random tumbles, landing any way up - scatter.drop_bricks);
+    a pick of a brick that isn't upright fails before the arm moves, saying
+    how it lies (only top-down grips exist so far), and his tree decides what
+    to do about it.
 
     `knock_later` (a part id) is a test hook: once that part has been placed
     and its landing checked, it's knocked `_KNOCK` off the stack - so the
@@ -231,7 +236,8 @@ def run_bridge(
     arms = ("left", "right") if arm == "nearest" else (arm,)
     scattered = None
     if scatter_seed is not None:
-        scattered = scatter_bricks(
+        start = drop_bricks if drop else scatter_bricks
+        scattered = start(
             model, data, [PART_BODIES[pid] for pid in ALL_PART_IDS], scatter_seed,
             Zone.load("either" if arm == "nearest" else arm),
         )
@@ -256,7 +262,7 @@ def run_bridge(
         part_ids=ALL_PART_IDS, interval=0.5, model=model, data=data, use_timer=False
     )
     if scattered is not None:
-        node.get_logger().info(f"scatter seed {scatter_seed}: {describe(scattered)}")
+        node.get_logger().info(f"{'drop' if drop else 'scatter'} seed {scatter_seed}: {describe(scattered)}")
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(perception)
@@ -360,6 +366,12 @@ def run_bridge(
                             node.get_logger().info(f"parked the {other} arm at home, out of the {use} arm's way")
 
                     if skill == "pick":
+                        lies = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                        if lies != UPRIGHT:
+                            raise RuntimeError(
+                                f"{PART_LABELS[part_id]} is {lies} - can't grip it from the top "
+                                f"(arm not moved; only upright bricks can be picked so far)"
+                            )
                         grasp_part(ctx, render, clock, center_xyz, relook=lambda: _relook(part_id))
                         relooked = (
                             "brick not visible from hover, kept the original aim"

@@ -7,6 +7,17 @@ comma-separated line per update:
 
     part,STATUS,x,y,z          (x,y,z only present when STATUS=LOCATED)
 
+This publisher adds two fields after z, whenever a camera sees the brick:
+
+    part,STATUS,x,y,z,LYING,yaw
+
+LYING is how the brick lies - UPRIGHT, UPSIDE_DOWN, ON_SIDE, ON_END or TILTED
+(scatter.lying) - and yaw its angle on the table in degrees, -90..90
+(scatter.table_yaw). His parser reads the first five fields and ignores the
+rest, so it keeps working as it is. Like the position, both are simulated:
+the true pose (plus ~2 deg noise on yaw) stands in for a detector reading it
+from a camera image.
+
 STATUS is one of LOCATED, LOST, PICKED, PICK_FAILED, PLACED, ESCALATED - this
 publisher sends LOCATED (it has a position) or LOST (no camera can currently
 see it), unless whoever moves the brick sets `status_override` (the skill
@@ -48,6 +59,7 @@ from std_msgs.msg import String
 
 import mujoco
 
+from .scatter import lying, table_yaw
 from .camera_calibration import (
     CAMERAS,
     REFERENCE_CAMERA,
@@ -69,6 +81,7 @@ PART_LABELS = {"31111p0e": "legs", "31111p0f": "body", "31111p0g": "head"}
 PART_BODIES = {"31111p0e": "zebra_legs", "31111p0f": "zebra_body", "31111p0g": "zebra_head"}
 ALL_PART_IDS = tuple(PART_BODIES)
 _LOST_INTERVAL = 0.1  # publish rate while a part is being reported LOST (lose_track)
+_YAW_NOISE = np.radians(2.0)  # one simulated look at the brick's angle
 
 
 class ZebraPerceptionPublisher(Node):
@@ -149,6 +162,9 @@ class ZebraPerceptionPublisher(Node):
             )
             for pid in self.part_ids
         }
+        self._body_ids = {pid: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, PART_BODIES[pid])
+                          for pid in self.part_ids}
+        self._data = data
         # Shared frame (headcam) -> world; headcam is fixed, so once is enough.
         self.shared_to_world = self.cams[self.part_ids[0]].cam_pose(REFERENCE_CAMERA)
         labels = ", ".join(f"{PART_LABELS[pid]} ({pid})" for pid in self.part_ids)
@@ -201,9 +217,13 @@ class ZebraPerceptionPublisher(Node):
         camera = REFERENCE_CAMERA if REFERENCE_CAMERA in available else available[0]
         shared = self.calibration.to_reference(camera, seen[camera], self.cams[pid])
         x, y, z = self.shared_to_world.apply(shared)  # world frame - see module docstring
+        R = self._data.xmat[self._body_ids[pid]].reshape(3, 3)
+        lies = lying(R)
+        yaw = np.degrees(table_yaw(R) + self.rng.normal(0.0, _YAW_NOISE))
+        yaw = (yaw + 90) % 180 - 90
         self._publish(
-            f"{pid},{status},{x:.4f},{y:.4f},{z:.4f}",
-            f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}",
+            f"{pid},{status},{x:.4f},{y:.4f},{z:.4f},{lies},{yaw:.1f}",
+            f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}  {lies} {yaw:+.0f} deg",
         )
 
     def _publish(self, line: str, shown: str) -> None:

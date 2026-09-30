@@ -10,6 +10,7 @@ Usage:
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
     python scripts/zebra_skill_bridge.py --scatter 7      # replay scatter seed 7
     python scripts/zebra_skill_bridge.py --fixed-start    # old fixed brick spots
+    python scripts/zebra_skill_bridge.py --drop           # drop the bricks, any way up
 
 Also publishes perception (/zebra/perception_updates) from this same
 simulation, so don't run scripts/zebra_publisher.py alongside it - that one
@@ -77,12 +78,19 @@ def main() -> None:
         help="start the bricks in their old fixed square spots instead of scattering them",
     )
     parser.add_argument(
+        "--drop", action="store_true",
+        help="drop the bricks from 15 cm with random tumbles instead of setting them down upright; "
+             "they land any way up (perception reports how) - same --scatter SEED, same drop",
+    )
+    parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
              "'first' move only, 'all' moves, or 'off' (default)",
     )
     args = parser.parse_args()
     move_check.set_mode(args.confirm_moves)
+    if args.fixed_start and args.drop:
+        parser.error("--fixed-start and --drop don't go together")
     if args.fixed_start:
         scatter_seed = None
     elif args.scatter is not None:
@@ -99,6 +107,7 @@ def main() -> None:
         knock_placed=PART_NAMES[args.knock_placed] if args.knock_placed else None,
         knock_later=PART_NAMES[args.knock_later] if args.knock_later else None,
         scatter_seed=scatter_seed,
+        drop=args.drop,
     )
 
 
