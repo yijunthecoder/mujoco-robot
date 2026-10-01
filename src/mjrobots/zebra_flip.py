@@ -814,16 +814,34 @@ def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy)
     return f"no free spot was reachable - the {c.arm} arm let go where it was"
 
 
-def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy=()) -> None:
+def keeps_holding(plan) -> bool:
+    """Whether the hand that ends a flip holds the brick the normal way - top-down, by its
+    long faces - so it can carry it straight to the stack instead of setting it down
+    (`execute_flip(keep=True)`). Only a two-hand flip of a brick on its side (B takes the
+    long faces); one hand ends holding the ends sideways, and on its end / upside down B
+    holds the ends. Measured over 6 such flips: the brick sits 2.5-7 deg tilted, 0.3-0.6
+    cm off B's grip point, and placed straight on the stack it landed 0.8-1.1 cm from the
+    target, upright (scratch b_grip.py, b_direct.py)."""
+    return isinstance(plan, FlipPlan) and _CASES[plan.lies]["b_pair"] == "y"
+
+
+def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy=(),
+                 keep=False, look_print=None) -> ZebraArmContext | None:
     """Do `plan` for real (contexts: {arm: ZebraArmContext} on the live data).
     `look(data)` returns the held brick's (rotation, centre) as a camera sees it - at the
     handover (B re-aims its grip) and before the set-down (aimed by where the brick really
     sits in the fingers). `other_xy`: where the other bricks are (kept clear if a failed
-    flip has to put the brick down somewhere).
+    flip has to put the brick down somewhere). With `keep` and a plan that `keeps_holding`,
+    the last hand keeps the brick (turned upright, not set down) and is returned; else the
+    brick is set down upright and None is returned. `look_print(data, camera)` (optional):
+    which way the printed face points as `camera` sees it, or None - asked of B's hand
+    camera at the handover look (~8 cm from the brick); the answer, in B's hand frame,
+    is kept as `B.print_in_hand` (None if it couldn't tell).
     Raises RuntimeError if a step fails (fingers miss, a move is refused) - after putting
     a still-held brick down on the table (`_put_down_after_failure`)."""
     try:
-        _execute_flip(plan, contexts, render, clock, look, other_xy)
+        return _execute_flip(plan, contexts, render, clock, look, other_xy, keep and keeps_holding(plan),
+                             look_print)
     except Exception as exc:
         try:
             what = _put_down_after_failure(plan, contexts, render, clock, look, other_xy)
@@ -832,10 +850,21 @@ def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look,
         raise RuntimeError(f"{exc} ({what})") from exc
 
 
-def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy) -> None:
+def set_down_kept(ctx: ZebraArmContext, render, clock, look, other_xy) -> np.ndarray:
+    """Set a brick kept after a flip (execute_flip(keep=True)) down upright on the table -
+    where the flip would have, else the next free spot - aimed by the camera look like the
+    flip's own set-down (a plain put-back assumes the brick is centred in the fingers;
+    after a handover it isn't, and one was pushed over onto its side). Returns the spot
+    (brick centre) it was set down on."""
+    spots = [ctx.picked_from] + _spots_around(ctx.picked_from, ctx.picked_from[2], other_xy)
+    return _set_down_somewhere(ctx, render, clock, spots, _yawed(ctx.grip_quat, ctx.grip_yaw), look)
+
+
+def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy, keep=False,
+                  look_print=None):
     if isinstance(plan, SoloPlan):
         _execute_solo(plan, contexts[plan.a_side], render, clock, look, other_xy)
-        return
+        return None
     A, B = contexts[plan.a_side], contexts[plan.b_side]
     model, data = A.model, A.data
     geo = _Geoms(model)
@@ -857,6 +886,8 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
     # point (it hung 1.4 cm low in testing), so B re-aims at where it really is -
     # position, and turn about vertical.
     Rb_seen, center_seen = look(data)
+    B.print_in_hand = None
+    n_print = look_print(data, f"{B.arm}_handcam") if look_print is not None else None
     offset = center_seen - plan.handover
     dyaw = _turn_about_vertical(Rb_seen, plan.brick_R)
     Rc = _rot([0, 0, 1.0], dyaw)
@@ -869,6 +900,8 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
     finally:
         B._check_clearance = B_check
     _close_and_settle(B, render, clock)
+    if n_print is not None:  # the brick doesn't move in the hand from here: keep it in B's frame
+        B.print_in_hand = data.xmat[B.body_id].reshape(3, 3).T @ np.asarray(n_print, float)
     if abs(B.grip_width() - plan.wB) > _WIDTH_TOL:
         raise RuntimeError(f"flip: {B.arm} arm missed the brick at the handover "
                            f"(fingers at {B.grip_width() * 100:.1f} cm, expected {plan.wB * 100:.1f})")
@@ -901,6 +934,10 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
                             _yawed(B.grip_quat, plan.grip_b), q_init=data.qpos[model.jnt_qposadr[B.joint_ids]].copy(),
                             iters=800)
         _joint_move(B, render, clock, q_h, f"{B.arm} arm turns the brick upright on the way")
+    if keep:  # B keeps it, upright in its normal grip, for the place
+        B.picked_from = plan.set_down.copy()  # where it goes back down if it can't be placed after all
+        return B
     # (the camera looking at the brick in B's hand: A's hand camera, backed out, faces it)
     spots = [plan.set_down] + _spots_around(plan.set_down, plan.set_down[2], other_xy)
     _set_down_somewhere(B, render, clock, spots, _yawed(B.grip_quat, plan.grip_b), look)
+    return None

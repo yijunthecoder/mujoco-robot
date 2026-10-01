@@ -78,14 +78,17 @@ from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .scatter import STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
 from .stationlite_pick_place import _GRIP_OPEN, _hold
-from .zebra_facing import FACING_YAW, SHOW_CAMERA, FacingError, long_face_view, pick_facing
-from .zebra_flip import PlanningProcess, execute_flip
+from .zebra_facing import (
+    FACING_YAW, SHOW_CAMERA, FacingError, can_place, held_from_print_in_hand, long_face_view, pick_facing,
+)
+from .zebra_flip import PlanningProcess, execute_flip, set_down_kept
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
     BRICK_HEIGHT,
     _DEFAULT_SCENE,
     ZebraArmContext,
+    _wrap,
     go_home,
     grasp_part,
     place_part,
@@ -333,14 +336,15 @@ def run_bridge(
                 return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
         return None
 
-    def _print_look(part_id: str):
-        """zebra_facing's `look_print`: which way the printed face points, as the headcam
-        sees the brick held up in front of it - or None if it can't tell. Stand-in for a
-        detector: the true direction plus ~3 deg noise, but only when the headcam really
-        has a usable view of a long face (zebra_facing.long_face_view: geometry, fingers
-        and arms blocking included) - seeing either face tells the side."""
+    def _print_look(part_id: str, camera: str = SHOW_CAMERA):
+        """zebra_facing's `look_print`: which way the printed face points, as `camera` sees
+        the brick (the headcam: held up in front of it; a hand camera: at a flip's
+        handover) - or None if it can't tell. Stand-in for a detector: the true direction
+        plus ~3 deg noise, but only when that camera really has a usable view of a long
+        face (zebra_facing.long_face_view: geometry, fingers and arms blocking included) -
+        seeing either face tells the side."""
         def look(d):
-            share, px = long_face_view(model, d, SHOW_CAMERA, brick_ids[part_id])
+            share, px = long_face_view(model, d, camera, brick_ids[part_id])
             if share < _PRINT_LOOK_MIN_SHARE or px < _PRINT_LOOK_MIN_PX:
                 return None
             n = -d.xmat[brick_ids[part_id]].reshape(3, 3)[:, 1] + perception.rng.normal(0.0, 0.05, 3)
@@ -353,6 +357,38 @@ def run_bridge(
         place command's own target is what's used for the place."""
         k = list(ALL_PART_IDS).index(part_id)
         return np.array([STACK_XY[0], STACK_XY[1], TABLE_Z + _BRICK_CENTER_OFFSET_Z + k * BRICK_HEIGHT])
+
+    def _place_from_hand(part_id: str, ctx, facing: str | None) -> tuple[bool, str, np.ndarray | None]:
+        """The hand that ended a flip kept the brick (zebra_flip.keeps_holding): can it go
+        straight to the stack, facing as asked? Returns (kept, why, None) - or after setting
+        it back down where the flip would have, (False, why, the spot it's on now; the pick
+        command's target is from before the flip) and it's picked as usual (with a facing,
+        shown to the headcam and picked up again: zebra_facing.pick_facing). The print
+        side comes from the flip's handover look (B's hand camera, ~8 cm away); not by
+        showing the brick from this grip - tilted towards the headcam it shifted in the
+        fingers and was placed off the stack."""
+        target = _stack_target(part_id)
+        if facing is not None:
+            n_hand = getattr(ctx, "print_in_hand", None)
+            if n_hand is None:
+                why = "its print side wasn't seen at the handover"
+            else:
+                ctx.held_yaw = held_from_print_in_hand(ctx, n_hand)
+                if can_place(ctx, target, FACING_YAW[facing]):
+                    facing_yaw[part_id] = FACING_YAW[facing]
+                    return True, f"its print side was seen at the handover: it can go on the stack facing {facing}", None
+                why = f"this grip can't set it down facing {facing} at the stack"
+        else:  # square, either way round
+            ctx.held_yaw = _wrap(_sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
+                                 - ctx.grip_yaw)
+            if any(can_place(ctx, target, yaw) for yaw in (0.0, np.pi)):
+                facing_yaw.pop(part_id, None)
+                return True, "it can go on the stack", None
+            why = "this grip can't reach the stack"
+        spot = set_down_kept(ctx, render, clock, _flip_look(part_id),
+                             [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id])
+        held_by.pop(part_id, None)
+        return False, why, spot
 
     def _flip_look(part_id: str):
         """execute_flip's `look`: a hand camera looking at the held brick (B's at the
@@ -443,9 +479,9 @@ def run_bridge(
                     requested = command.get("arm")
                     if requested is not None and requested not in arms:
                         raise ValueError(f"asked for the {requested} arm, but only {'/'.join(arms)} is in use")
-                    use = held_by.get(part_id) if skill == "place" else None
+                    use = held_by.get(part_id)  # a brick in a hand stays with that hand (place; kept after a flip)
                     if requested is not None and use is not None and requested != use:
-                        raise ValueError(f"asked to place with the {requested} arm, but the {use} arm is holding it")
+                        raise ValueError(f"asked for the {requested} arm, but the {use} arm is holding it")
                     use = use or requested or (
                         arms[0] if len(arms) == 1 else choose_arm(center_xyz[:2], zones, bases)
                     )
@@ -454,7 +490,22 @@ def run_bridge(
                         if other != use and go_home(contexts[(other, part_id)], render, clock):
                             node.get_logger().info(f"parked the {other} arm at home, out of the {use} arm's way")
 
-                    if skill == "pick":
+                    kept = None
+                    if skill == "pick" and part_id in held_by and ctx.holding:  # kept after a flip
+                        facing = command.get("desired_facing")
+                        if facing is not None and facing not in FACING_YAW:
+                            raise ValueError(f"unknown desired_facing '{facing}' (use {'/'.join(FACING_YAW)})")
+                        kept, why, spot = _place_from_hand(part_id, ctx, facing)
+                        node.get_logger().info(
+                            f"{use} arm already holds {PART_LABELS[part_id]} from the flip: {why}"
+                            + ("" if kept else " - set it down to pick it up again"))
+                        if kept:
+                            perception.status_override[part_id] = "PICKED"
+                        else:
+                            center_xyz = spot  # where it is now (the command's target is from before the flip)
+                    if skill == "pick" and kept:
+                        pass  # already in the hand from the flip: nothing to move
+                    elif skill == "pick":
                         lies = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
                         if lies != UPRIGHT:
                             raise RuntimeError(
@@ -466,9 +517,14 @@ def run_bridge(
                             if facing not in FACING_YAW:
                                 raise ValueError(f"unknown desired_facing '{facing}' (use {'/'.join(FACING_YAW)})")
                             try:
-                                ctx, how = pick_facing({a: contexts[(a, part_id)] for a in arms}, use, render, clock,
-                                                       center_xyz, _stack_target(part_id), FACING_YAW[facing],
-                                                       lambda: _relook(part_id), _print_look(part_id))
+                                ctx, how = pick_facing(
+                                    {a: contexts[(a, part_id)] for a in arms}, use, render, clock, center_xyz,
+                                    _stack_target(part_id), FACING_YAW[facing], lambda: _relook(part_id),
+                                    _print_look(part_id),
+                                    # still upright in the hand? (stand-in, like perception's LYING)
+                                    still_upright=lambda d: lying(d.xmat[brick_ids[part_id]].reshape(3, 3)) == UPRIGHT,
+                                    idle=perception.maybe_publish, look_held=_flip_look(part_id),
+                                    other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id])
                             except FacingError as exc:
                                 raise RuntimeError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}") from exc
                             use = ctx.arm
@@ -574,22 +630,33 @@ def run_bridge(
                             try:
                                 # where the other bricks are (sim positions, like the planner's)
                                 others_xy = [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id]
-                                execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render, clock,
-                                             _flip_look(part_id), others_xy)
+                                holder = execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render,
+                                                      clock, _flip_look(part_id), others_xy, keep=True,
+                                                      look_print=lambda d, cam: _print_look(part_id, cam)(d))
                             except Exception:
                                 _let_go_and_park(part_id)
                                 raise
-                            for _ in range(250):  # let it settle
-                                sim_step.step(model, data)
-                                clock.tick()
-                                render.step()
-                            now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
-                            if now != UPRIGHT:
-                                raise RuntimeError(f"flip of {label} ended {now}, not upright")
-                            node.get_logger().info(
-                                f"flipped {label} upright, set down at ({plan.set_down[0]:.2f}, {plan.set_down[1]:+.2f}) "
-                                f"- {data.time - t0:.0f} s in all"
-                            )
+                            if holder is not None:  # kept, upright, for the place (zebra_flip.keeps_holding)
+                                now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                                if now != UPRIGHT:
+                                    set_down_kept(holder, render, clock, _flip_look(part_id), others_xy)
+                                    raise RuntimeError(f"flip of {label} ended {now} in the {holder.arm} hand - set it down")
+                                held_by[part_id] = holder.arm
+                                perception.status_override[part_id] = "PICKED"
+                                node.get_logger().info(f"flipped {label} upright, kept in the {holder.arm} hand for the "
+                                                       f"place (no set-down) - {data.time - t0:.0f} s in all")
+                            else:
+                                for _ in range(250):  # let it settle
+                                    sim_step.step(model, data)
+                                    clock.tick()
+                                    render.step()
+                                now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                                if now != UPRIGHT:
+                                    raise RuntimeError(f"flip of {label} ended {now}, not upright")
+                                node.get_logger().info(
+                                    f"flipped {label} upright, set down at ({plan.set_down[0]:.2f}, "
+                                    f"{plan.set_down[1]:+.2f}) - {data.time - t0:.0f} s in all"
+                                )
                     else:
                         raise ValueError(f"unknown skill '{skill}'")
                     # Publish the new status BEFORE replying, so no stale

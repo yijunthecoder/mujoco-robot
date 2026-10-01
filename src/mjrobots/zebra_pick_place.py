@@ -271,6 +271,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None, gri
 
     ctx.relook_shift = None
     brick_yaw = 0.0  # assumed square unless the look again measures it
+    yaw_seen = False
     look = relook() if relook is not None else None
     if look is not None:
         seen, seen_yaw = look
@@ -285,10 +286,12 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None, gri
         hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
         if seen_yaw is not None:
             brick_yaw = float(seen_yaw)
+            yaw_seen = True
 
     grips = sorted({_wrap(brick_yaw), _wrap(brick_yaw + np.pi)}, key=abs)
     if grip_yaws is not None:  # a chosen grip only (zebra_facing: the one that gives the wanted facing)
-        grips = list(grip_yaws)
+        # a function of the yaw just seen from hover (None if not seen), or fixed grip yaws
+        grips = list(grip_yaws(brick_yaw if yaw_seen else None) if callable(grip_yaws) else grip_yaws)
     grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, grips)
     ctx.held_yaw = _wrap(brick_yaw - grip_yaw)
     ctx.picked_from = center_xyz.copy()
