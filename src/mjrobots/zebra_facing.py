@@ -32,8 +32,10 @@ from . import cartesian_control
 from . import zebra_pick_place as zpp
 from .camera_calibration import IMAGE_SIZE
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, solve_ik_pose
-from .zebra_flip import _plan_only, set_down_kept
-from .zebra_pick_place import ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _wrap, go_home, grasp_part, put_back
+from .zebra_flip import _MIN_TABLE_GAP, _plan_only, set_down_kept
+from .zebra_pick_place import (
+    BRICK_HEIGHT, ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _wrap, go_home, grasp_part, put_back,
+)
 
 
 class FacingError(RuntimeError):
@@ -50,6 +52,12 @@ class FacingError(RuntimeError):
 # at yaw 0 it points to world -Y).
 FACING_YAW = {"FORWARD": 0.0, "BACKWARD": np.pi}
 SHOW_CAMERA = "headcam"
+# The grasp for the show goes this far below the brick's centre: fingertips 0.5 cm above
+# the table (zebra_flip's table gap). Held tilted for the show, the brick slides ~1.1 cm
+# (up to 2.1) down the fingers; from the usual grip (fingertips at mid-height, top half
+# held) that left as little as 0.7 cm of it between them and the next move dropped it
+# (seed 3445's legs, upside down). From this one >= 2.2 cm is left (show_drop.py, 12 bricks).
+_SHOW_GRIP_DEPTH = BRICK_HEIGHT / 2 - _MIN_TABLE_GAP
 _SHOW_DISTANCES = (0.50, 0.55, 0.60, 0.65)  # m from the camera (nearer is out of reach)
 _SHOW_OFFSETS = np.radians([(0, 0), (15, 0), (-15, 0), (0, 12), (0, -12), (15, 12), (-15, 12), (15, -12), (-15, -12)])
 _SHOW_LEANS = np.radians([0, 20, 40])  # face turned this far from looking straight at the camera
@@ -266,7 +274,7 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         return set_down_kept(ctx, render, clock, look_held, other_xy)
 
     c = contexts[arm]
-    grasp_part(c, render, clock, center_xyz, relook=relook)
+    grasp_part(c, render, clock, center_xyz, relook=relook, depth=_SHOW_GRIP_DEPTH)
     held = show_and_look(c, render, clock, look_print, idle)
     if still_upright is not None and still_upright(c.data) is False:
         # held up to the camera it can swing round between the fingertips (once all the way

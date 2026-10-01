@@ -152,10 +152,10 @@ once and B places it - ~25 s saved. Every other flip ends holding the ends
 `desired_facing`, which side the print is on comes from B's hand camera at
 the handover (~8 cm away); if it didn't see it, or B's grip can't set it down
 facing that way, B sets it down and it's picked as above. Tested: kept bricks
-placed 1.0-1.4 cm off; known issue: seed 3445's legs with a facing (print not
-seen at the handover) misses the re-pick in the bridge every time, though a
-headless replay of the same steps works - reported `FAILED`, so the tree
-re-locates it.
+placed 1.0-1.4 cm off. Seed 3445's legs with a facing (print not seen at the
+handover: set down, shown, picked again) used to fall out of the fingers after
+the show; fixed by the deeper show grasp (see "Which way the print faces"),
+now placed 0.8-0.9 cm off facing FORWARD with Victor's tree.
 
 A flip takes 25-60 s live, longer than his tree's 30 s flip timeout: the
 tree then marks the attempt `FAILED` and sends `flip` again, which finds the
@@ -171,7 +171,10 @@ points to world -Y, the robot's right / the right of the headcam image;
 1. pick the brick as usual, then **show it to the headcam**: hold it 50-65 cm
    in front of it with a long face turned to it (from the table no camera can
    tell which side the print is on: from above the long faces don't show, and
-   the headcam sees them 3-10 px tall; shown, 20-30 px);
+   the headcam sees them 3-10 px tall; shown, 20-30 px). This pick grips
+   deeper (fingertips 0.5 cm above the table, not at mid-height): tilted, the
+   brick slides ~1 cm down the fingers, and from the usual grip that left too
+   little held - seed 3445's legs fell out upside down;
 2. from which way the print points in the hand, work out how it's held;
 3. **put it back and pick it up again** with the grip that sets it down facing
    that way - the same grip, the other one, or the other arm (tilted towards
