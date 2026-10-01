@@ -101,6 +101,8 @@ _CASES = {
     ON_END: dict(a_axis=1, total=np.pi / 2, b_pair="x", wA=0.032, wB=0.064, rolls=(np.pi / 4,)),
     UPSIDE_DOWN: dict(a_axis=1, total=np.pi, b_pair="x", wA=0.032, wB=0.064, rolls=(np.pi / 2,)),
 }
+# The landings one hand can stand up alone (a 90 deg turn; upside down needs 180).
+_ONE_HAND = (ON_SIDE, ON_END)
 
 
 def _mat(q):
@@ -361,17 +363,19 @@ class _Planner:
             return None
         return grip_a, Rgrasp, q_grasp, rel, d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
 
-    # --- one hand alone (on its side) ---
+    # --- one hand alone (on its side or on its end: a 90 deg turn) ---
     def attempt_solo(self, lies, Rb0, center, a_side, far=False):
-        """A picks it by the ends, rolls its hand the whole 90 deg (the brick is then
-        upright in its fingers), lowers it onto a set-down spot (`far`: see
-        set_down_spots) and lets go."""
-        wA = _CASES[ON_SIDE]["wA"]  # fingers across the long side: the ends
+        """A picks it by the pair of faces across the turn's axis (_CASES: on its side the
+        two ends, on its end the two long faces), rolls its hand the whole 90 deg about
+        that axis (the brick is then upright in its fingers), lowers it onto a set-down
+        spot (`far`: see set_down_spots) and lets go."""
+        cfg = _CASES[lies]
+        wA = cfg["wA"]
         other = "left" if a_side == "right" else "right"
         d, ctx = self.fresh()
         cA = ctx[a_side]
         with _plan_only():
-            picked = self.pick(d, cA, Rb0, center, 0)
+            picked = self.pick(d, cA, Rb0, center, cfg["a_axis"])
             if picked is None:
                 return None
             grip_a, Rgrasp, _, rel, q_lift = picked
@@ -552,9 +556,9 @@ class _Planner:
         then the on-side flip) planned 2 more of 26 upside-down bricks, but made a
         "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout."""
         cfg = _CASES[lies]
-        solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies == ON_SIDE else []
+        solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies in _ONE_HAND else []
         two = [lambda side, r=r: self.attempt(lies, Rb0, center, side, r) for r in cfg["rolls"]]
-        slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies == ON_SIDE else []
+        slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies in _ONE_HAND else []
         for strategies in (solo, two, slow):
             for a_side in self.arms_order:
                 for strategy in strategies:

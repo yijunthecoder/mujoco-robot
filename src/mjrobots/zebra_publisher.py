@@ -221,8 +221,13 @@ class ZebraPerceptionPublisher(Node):
         lies = lying(R)
         yaw = np.degrees(table_yaw(R) + self.rng.normal(0.0, _YAW_NOISE))
         yaw = (yaw + 90) % 180 - 90
+        # Field 8, FACING (FORWARD / BACKWARD, Victor's 66c34e7): which way the printed face
+        # points. No camera can tell yet - the print is on a side face, the headcam is too
+        # far to read it and the yaw above is only known up to 180 deg - so UNKNOWN, which
+        # his tree treats as fine. The real value comes with print detection.
+        facing = "UNKNOWN"
         self._publish(
-            f"{pid},{status},{x:.4f},{y:.4f},{z:.4f},{lies},{yaw:.1f}",
+            f"{pid},{status},{x:.4f},{y:.4f},{z:.4f},{lies},{yaw:.1f},{facing}",
             f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}  {lies} {yaw:+.0f} deg",
         )
 

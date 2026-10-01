@@ -102,15 +102,17 @@ upright in 3 of 400 seeds (129, 215, 333). They slide only 1-5 cm, and the
 same seed always lands the same way.
 
 Perception now also says how each brick lies and its angle on the table, in
-two extra fields after z (Victor's parser reads the first five and ignores
-the rest, so his tree runs unchanged):
+three extra fields after z (Victor's tree reads LYING for its flip step and
+FACING for its rotate step):
 
 ```
-part,STATUS,x,y,z,LYING,yaw
+part,STATUS,x,y,z,LYING,yaw,FACING
 ```
 
-LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, and yaw the angle in
-degrees (-90..90). The bridge log shows it too, e.g. seed 1's body:
+LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, yaw the angle in
+degrees (-90..90), and FACING which way the printed face points (`FORWARD` /
+`BACKWARD`, for Victor's rotate step) - always `UNKNOWN` until a camera can
+read the print (his tree treats `UNKNOWN` as fine; it reads FACING from field 8). The bridge log shows it too, e.g. seed 1's body:
 `body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg`. A pick
 of a brick that isn't upright is refused before moving (only top-down grips
 exist): his tree sends **`flip`** first (its `EnsureUpright` step).
@@ -124,7 +126,7 @@ bridge decides *how*:
 | brick lies | turn needed | how |
 |---|---|---|
 | on its side | 90 deg about its long side | **one hand** if the arm can reach: grip the two ends, roll the wrist 90 deg, set it down. Else **two hands**: A rolls 45 deg, B takes it by the middle and turns 45 deg |
-| on its end | 90 deg about its short side | two hands, 45 + 45 deg |
+| on its end | 90 deg about its short side | **one hand** if the arm can reach: grip the two long faces, roll the wrist 90 deg, set it down. Else two hands, 45 + 45 deg |
 | upside down | 180 deg | two hands, 90 + 90 deg (one wrist can't turn 180 deg) |
 
 A brick no safe plan fits is answered `FAILED` ("no way found to flip it
@@ -132,8 +134,8 @@ A brick no safe plan fits is answered `FAILED` ("no way found to flip it
 it to a human. Planned on a scratch copy first (nothing moves until a whole
 flip is known to work), in a separate process so the viewer and perception
 keep running. Over 30 dropped bricks (seeds 1-12): **18 can be flipped**
-(on its side 13/17, on its end 1/4, upside down 4/9; over 40 seeds upside
-down 8/26) - see Notes. Seeds to watch:
+(on its side 13/17, on its end 1/4, upside down 4/9; over 40 seeds on its
+end 14/19 since one hand can do it, upside down 8/26) - see Notes. Seeds to watch:
 
 ```bash
 $ bash scripts/run_zebra.sh --scatter 7      # legs and body flipped by one hand each, full zebra
@@ -529,6 +531,7 @@ set-down spot is inside the green zone, so the brick can be picked up again.
 | on its side, one hand | 8 | 10/10 upright |
 | on its side, two hands (45+45) | 5 | all tried upright (seeds 2, 3445, 5, 12) |
 | on its end, two hands | 1 | upright (seed 3445's head) |
+| on its end, one hand (added after; 40 seeds) | 7 of 19 (14/19 with two hands, was 8/19) | 7/7 upright |
 | upside down, two hands | 4 | 4/4 upright (0/4 before the re-aim fix below) |
 | no plan | 12 | - |
 
@@ -595,8 +598,9 @@ first lowers it onto a free spot - the same rules as a set-down - then lets go:
 seeds 9 body and 2 legs ended 14 and 22 cm from the stack, put down, not
 dropped (`_put_down_after_failure`).
 
-**Still open:** upside-down coverage (8/26 get a plan); one hand for bricks
-on their end (untried); which way the print
+**Still open:** upside-down coverage (8/26 get a plan); an on-end brick with
+no plan now takes longer to say so (the far one-hand search: up to ~39 s with
+4 tests in parallel, past the 30 s timeout); which way the print
 faces at the stack (perception only knows the angle up to 180 deg); the
 brick's 3D pose comes from the simulation (a stand-in for a detector).
 
