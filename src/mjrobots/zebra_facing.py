@@ -28,7 +28,7 @@ import copy
 import mujoco
 import numpy as np
 
-from . import cartesian_control
+from . import cartesian_control, sim_step
 from . import zebra_pick_place as zpp
 from .camera_calibration import IMAGE_SIZE
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, solve_ik_pose
@@ -58,6 +58,9 @@ SHOW_CAMERA = "headcam"
 # held) that left as little as 0.7 cm of it between them and the next move dropped it
 # (seed 3445's legs, upside down). From this one >= 2.2 cm is left (show_drop.py, 12 bricks).
 _SHOW_GRIP_DEPTH = BRICK_HEIGHT / 2 - _MIN_TABLE_GAP
+# Held still this long at the show pose before the look: a camera needs the brick at rest
+# for a sharp image (no motion blur), and it lets a person watching see the show.
+_SHOW_STILL_S = 1.0
 _SHOW_DISTANCES = (0.50, 0.55, 0.60, 0.65)  # m from the camera (nearer is out of reach)
 _SHOW_OFFSETS = np.radians([(0, 0), (15, 0), (-15, 0), (0, 12), (0, -12), (15, 12), (-15, 12), (15, -12), (-15, -12)])
 _SHOW_LEANS = np.radians([0, 20, 40])  # face turned this far from looking straight at the camera
@@ -197,8 +200,8 @@ def show_and_look(ctx: ZebraArmContext, render, clock, look_print, idle=None) ->
     path = [q0 + (i / n) * (q - q0) for i in range(1, n + 1)]
     ctx._check_clearance(path, f"{ctx.arm} arm shows the brick to the {SHOW_CAMERA}")
     cartesian_control._confirm_and_follow(ctx.model, ctx.data, render, clock, ctx.arm_ctrl, q0, path,
-                                          f"{ctx.arm} arm shows the brick", steps_per_wp=20, settle_steps=150,
-                                          carry=None)
+                                          f"{ctx.arm} arm shows the brick", steps_per_wp=20,
+                                          settle_steps=round(_SHOW_STILL_S / sim_step.CONTROL_DT), carry=None)
     n_print = look_print(ctx.data)
     held = None
     if n_print is not None:
