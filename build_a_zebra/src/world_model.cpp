@@ -83,13 +83,14 @@ namespace zebra_bt
   void WorldModel::perceptionCallback(const std_msgs::msg::String::SharedPtr msg)
   {
     stringstream ss(msg->data);
-    string part, status_str, xs, ys, zs, orient_str, facing_str;
+    string part, status_str, xs, ys, zs, orient_str, yaw_str, facing_str;
     if (!getline(ss, part, ',')) return;
     if (!getline(ss, status_str, ',')) return;
     getline(ss, xs, ',');
     getline(ss, ys, ',');
     getline(ss, zs, ',');
     getline(ss, orient_str, ',');
+    getline(ss, yaw_str, ',')
     getline(ss, facing_str, ',');
 
     PartStatus status = PartStatus::UNKNOWN;
