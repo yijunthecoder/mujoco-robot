@@ -707,7 +707,9 @@ def _set_down_seen(ctx: ZebraArmContext, render, clock, set_down, quat, look) ->
     """Lower the held brick straight down onto `set_down` (its centre, upright) and let
     go. Aimed by where a camera sees the brick in the fingers (`look`), not where the
     fingers are: a brick held 1.25 cm off its middle, set down as if centred, was
-    pushed into the table and tipped over."""
+    pushed into the table and tipped over. The hand keeps its orientation all the way
+    (a position-only move to above the spot let the wrist swing, and an on-end brick
+    held by its ends swivelled out of upright - seed 3445's head)."""
     model, data = ctx.model, ctx.data
     _, center_seen = look(data)
     grip_point = data.xpos[ctx.body_id] + data.xmat[ctx.body_id].reshape(3, 3) @ HAND_LOCAL_OFFSET
@@ -723,13 +725,52 @@ def _set_down_seen(ctx: ZebraArmContext, render, clock, set_down, quat, look) ->
                  hover, quat, path_check=ctx._check_clearance)
 
 
-def _execute_solo(plan: SoloPlan, A: ZebraArmContext, render, clock, look) -> None:
+def _spots_around(center, z, other_xy) -> list[np.ndarray]:
+    """free_spots around `center` (near ones, then the far ones), at centre height `z`."""
+    zone = Zone.load("either")
+    xys = free_spots(zone, center, other_xy) + free_spots(zone, center, other_xy, far=True)
+    return [np.array([x, y, z]) for x, y in xys]
+
+
+def _set_down_somewhere(ctx: ZebraArmContext, render, clock, spots, quat, look):
+    """_set_down_seen on the first of `spots` the arm can reach; returns the spot used.
+    The plan's spot comes first, but it was checked with where the plan expected the brick
+    in the fingers: once the camera has seen where it really sits (seed 2's legs: tilted
+    ~8 deg), the plan's spot can be just out of reach - then the next free one is used.
+    Raises IKError if none is reachable (refused moves don't move the arm)."""
+    last = None
+    for spot in spots:
+        try:
+            _set_down_seen(ctx, render, clock, spot, quat, look)
+            return spot
+        except IKError as error:
+            last = error
+    raise IKError(f"no reachable spot to set the brick down: {last}")
+
+
+def _execute_solo(plan: SoloPlan, A: ZebraArmContext, render, clock, look, other_xy) -> None:
     """One hand alone: pick it by the ends, roll 90 deg over the spot, set it down, go home."""
     _hold(A.model, A.data, render, clock, A.this_arm, _GRIP_OPEN, 60)
     _pick_as_it_lies(A, plan, render, clock)
     _joint_move(A, render, clock, plan.q_a_hover, f"{A.arm} arm rolls the brick upright")
-    _set_down_seen(A, render, clock, plan.set_down, plan.a_quat, look)
+    spots = [plan.set_down] + _spots_around(plan.set_down, plan.set_down[2], other_xy)
+    _set_down_somewhere(A, render, clock, spots, plan.a_quat, look)
     go_home(A, render, clock)
+
+
+def _turn_about_vertical(R_seen, R_planned) -> float:
+    """How far the brick is turned about the vertical from where the plan expected it
+    (rad), from the whole rotation between the two. Not from the heading of the brick's
+    long side: in an upside-down flip A holds that side pointing straight up, where its
+    heading is noise - it read 82-88 deg off on all 4 upside-down bricks tested, B's
+    "corrected" grip was then out of reach and every one of those flips failed.
+    A brick looks the same turned 180 deg about its studs, so with the studs about
+    vertical the smaller of the two turns is taken."""
+    rel = R_seen @ R_planned.T
+    turn = float(np.arctan2(rel[1, 0] - rel[0, 1], rel[0, 0] + rel[1, 1]))
+    if abs(R_seen[2, 2]) > np.cos(np.radians(30)) and abs(turn) > np.pi / 2:
+        turn = _wrap(turn + np.pi)
+    return turn
 
 
 def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy) -> str:
@@ -756,15 +797,14 @@ def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy)
     c = holders[0]
     c.holding = True
     quat = data.xquat[c.body_id].copy()  # keep the hand as it is: the brick stays the way it lies
-    R_seen, center_seen = look(data)
+    R_seen, _ = look(data)
     height = float(np.abs(R_seen[2]) @ size)  # centre height above the table, lying as it is
-    zone = Zone.load("either")
-    for xy in free_spots(zone, plan.center, other_xy) + free_spots(zone, plan.center, other_xy, far=True):
-        try:
-            _set_down_seen(c, render, clock, np.array([xy[0], xy[1], TABLE_TOP + height]), quat, look)
-            return f"the {c.arm} arm set the brick down on the table at ({xy[0]:.2f}, {xy[1]:+.2f})"
-        except IKError:
-            continue
+    try:
+        spot = _set_down_somewhere(c, render, clock, _spots_around(plan.center, TABLE_TOP + height, other_xy),
+                                   quat, look)
+        return f"the {c.arm} arm set the brick down on the table at ({spot[0]:.2f}, {spot[1]:+.2f})"
+    except IKError:
+        pass
     _hold(model, data, render, clock, c.this_arm, _GRIP_OPEN, 150)
     c.holding = False
     return f"no free spot was reachable - the {c.arm} arm let go where it was"
@@ -779,7 +819,7 @@ def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look,
     Raises RuntimeError if a step fails (fingers miss, a move is refused) - after putting
     a still-held brick down on the table (`_put_down_after_failure`)."""
     try:
-        _execute_flip(plan, contexts, render, clock, look)
+        _execute_flip(plan, contexts, render, clock, look, other_xy)
     except Exception as exc:
         try:
             what = _put_down_after_failure(plan, contexts, render, clock, look, other_xy)
@@ -788,9 +828,9 @@ def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look,
         raise RuntimeError(f"{exc} ({what})") from exc
 
 
-def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look) -> None:
+def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy) -> None:
     if isinstance(plan, SoloPlan):
-        _execute_solo(plan, contexts[plan.a_side], render, clock, look)
+        _execute_solo(plan, contexts[plan.a_side], render, clock, look, other_xy)
         return
     A, B = contexts[plan.a_side], contexts[plan.b_side]
     model, data = A.model, A.data
@@ -814,9 +854,7 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
     # position, and turn about vertical.
     Rb_seen, center_seen = look(data)
     offset = center_seen - plan.handover
-    dyaw = _wrap(np.arctan2(Rb_seen[1, 0], Rb_seen[0, 0]) - np.arctan2(plan.brick_R[1, 0], plan.brick_R[0, 0]))
-    if abs(abs(dyaw) - np.pi) < np.pi / 2:  # a brick looks the same turned 180 deg about its studs
-        dyaw = _wrap(dyaw + np.pi)
+    dyaw = _turn_about_vertical(Rb_seen, plan.brick_R)
     Rc = _rot([0, 0, 1.0], dyaw)
     b_point = plan.b_point + offset
     b_quat = _quat(Rc @ _mat(plan.b_quat_tilted))
@@ -860,4 +898,5 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
                             iters=800)
         _joint_move(B, render, clock, q_h, f"{B.arm} arm turns the brick upright on the way")
     # (the camera looking at the brick in B's hand: A's hand camera, backed out, faces it)
-    _set_down_seen(B, render, clock, plan.set_down, _yawed(B.grip_quat, plan.grip_b), look)
+    spots = [plan.set_down] + _spots_around(plan.set_down, plan.set_down[2], other_xy)
+    _set_down_somewhere(B, render, clock, spots, _yawed(B.grip_quat, plan.grip_b), look)

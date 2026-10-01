@@ -529,7 +529,7 @@ set-down spot is inside the green zone, so the brick can be picked up again.
 | on its side, one hand | 8 | 10/10 upright |
 | on its side, two hands (45+45) | 5 | all tried upright (seeds 2, 3445, 5, 12) |
 | on its end, two hands | 1 | upright (seed 3445's head) |
-| upside down, two hands | 4 | 2 of 4 fail: B's re-aimed grip lands just out of reach (seeds 2 legs, 9 body) |
+| upside down, two hands | 4 | 4/4 upright (0/4 before the re-aim fix below) |
 | no plan | 12 | - |
 
 Planning: 7.1 s average, 15.6 s slowest (4 runs in parallel); a "no plan"
@@ -564,7 +564,15 @@ answer takes ~20 s in the bridge.
   (kept 0.5 cm clear).
 - **Set-down aimed by a look at the held brick**, not by where the fingers
   are: a brick held off its middle, set down as if centred, was pushed into
-  the table.
+  the table. If the planned spot is out of reach once the camera has seen how
+  the brick really sits (seed 2's legs, tilted ~8 deg in the hand), the next
+  free spot is used. The hand keeps its orientation on the way: a free move
+  let the wrist swing and an on-end brick held by its ends swivelled.
+- **B's re-aim measures the turn from the whole orientation.** It used the
+  heading of the brick's long side, which in an upside-down flip points
+  straight up - a meaningless heading that read 82-88 deg on all 4
+  upside-down bricks, so B turned its hand that far and was out of reach.
+  Upside down went from 0/4 to 4/4 in physics.
 - **A steps clear before going home** after the handover: the plan checks A's
   way home with B where the plan put it, but B re-aims ~1 cm at where the
   brick really hangs (seed 1: refused at 1.8 cm from B, 2 cm allowed).
@@ -580,15 +588,15 @@ answer takes ~20 s in the bridge.
 side, then the on-side flip): 2 more of 26 upside-down bricks, but a "no
 plan" answer took up to 44-69 s, past the 30 s flip timeout.
 
-**A flip that fails halfway** (e.g. B's re-aimed grip out of reach) used to
+**A flip that fails halfway** (e.g. a move refused) used to
 open both hands, dropping the brick 11-15 cm, once 4 cm from the stack. Now a
 hand that still holds it (the fingers stopped at one of the brick's widths)
 first lowers it onto a free spot - the same rules as a set-down - then lets go:
 seeds 9 body and 2 legs ended 14 and 22 cm from the stack, put down, not
 dropped (`_put_down_after_failure`).
 
-**Still open:** upside-down coverage (8/26); B's re-aim out
-of reach; one hand for bricks on their end (untried); which way the print
+**Still open:** upside-down coverage (8/26 get a plan); one hand for bricks
+on their end (untried); which way the print
 faces at the stack (perception only knows the angle up to 180 deg); the
 brick's 3D pose comes from the simulation (a stand-in for a detector).
 
