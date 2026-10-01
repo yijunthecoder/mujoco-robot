@@ -119,7 +119,8 @@ when it can't be placed facing FORWARD) and placed (`_known_facing` in the
 bridge). Pointing within 20 deg of sideways it stays `UNKNOWN` (in the hand the
 brick can turn ~18 deg). Checked against the sim's truth on 9 bricks: every
 value right. The bridge log shows it too, e.g. seed 1's body:
-`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg UNKNOWN`. A pick
+`body  LOCATED  ON_SIDE, facing UNKNOWN` (position and yaw are in the published
+message, not the log). A pick
 of a brick that isn't upright is refused before moving (only top-down grips
 exist): his tree sends **`flip`** first (its `EnsureUpright` step).
 

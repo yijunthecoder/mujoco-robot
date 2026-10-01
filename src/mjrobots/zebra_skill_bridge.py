@@ -427,13 +427,19 @@ def run_bridge(
             return "FORWARD" if n[1] < 0 else "BACKWARD"
 
         arm_ = print_seen_by.get(part_id)
-        if arm_ is not None and contexts[(arm_, part_id)].holding:
+        if arm_ is not None:
             ctx = contexts[(arm_, part_id)]
             grip = np.empty(9)
             mujoco.mju_quat2Mat(grip, ctx.grip_quat)
+            R_hand = data.xmat[ctx.body_id].reshape(3, 3)
             h = ctx.held_yaw  # the print is the brick's -y face; at held_yaw 0 it's the grip's -y
-            in_hand = grip.reshape(3, 3).T @ np.array([np.sin(h), -np.cos(h), 0.0])
-            return side(data.xmat[ctx.body_id].reshape(3, 3) @ in_hand)
+            if ctx.holding:
+                return side(R_hand @ grip.reshape(3, 3).T @ np.array([np.sin(h), -np.cos(h), 0.0]))
+            # it has just let go (put back / placed): on the table at the hand's turn about
+            # vertical plus how it was held (the put-back / place then gives the exact yaw)
+            turn = R_hand @ grip.reshape(3, 3).T
+            print_yaw[part_id] = float(np.arctan2(turn[1, 0], turn[0, 0]) + h)
+            print_seen_by.pop(part_id)
         if part_id in print_yaw:
             if lying(data.xmat[b].reshape(3, 3)) != UPRIGHT:
                 print_yaw.pop(part_id)
@@ -444,6 +450,16 @@ def run_bridge(
         return side([np.sin(yaw), -np.cos(yaw), 0.0])  # the print is on the brick's -y face
 
     perception.facing_of = _known_facing
+
+    def _print_seen(part_id: str, ctx, yaw: float | None) -> None:
+        """zebra_facing's on_seen: `part_id`'s print side is known - held by `ctx`
+        (ctx.held_yaw the full one), or (ctx None) lying on the table at full yaw `yaw`."""
+        if ctx is not None:
+            print_seen_by[part_id] = ctx.arm
+            print_yaw.pop(part_id, None)
+        else:
+            print_seen_by.pop(part_id, None)
+            print_yaw[part_id] = yaw
 
     def _flip_look(part_id: str):
         """execute_flip's `look`: a hand camera looking at the held brick (B's at the
@@ -582,11 +598,9 @@ def run_bridge(
                                     still_upright=lambda d: lying(d.xmat[brick_ids[part_id]].reshape(3, 3)) == UPRIGHT,
                                     idle=perception.maybe_publish, look_held=_flip_look(part_id),
                                     other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id],
-                                    on_seen=lambda c: print_seen_by.__setitem__(part_id, c.arm))
+                                    on_seen=lambda c, y: _print_seen(part_id, c, y))
                             except FacingError as exc:
-                                print_seen_by.pop(part_id, None)
-                                if exc.yaw is not None:  # put back, its print side known
-                                    print_yaw[part_id] = exc.yaw
+                                print_seen_by.pop(part_id, None)  # not held any more
                                 raise FacingError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}",
                                                   exc.reason) from exc
                             use = ctx.arm
@@ -739,6 +753,9 @@ def run_bridge(
                     if part_id in held_by and not contexts[(held_by[part_id], part_id)].holding:
                         held_by.pop(part_id)  # missed, put back, or let go somewhere wrong
                         print_seen_by.pop(part_id, None)
+                    if not isinstance(exc, FacingError):  # it may have tumbled: its facing is unknown again
+                        print_seen_by.pop(part_id, None)
+                        print_yaw.pop(part_id, None)
                     node.report(command_id, "FAILED", str(exc), getattr(exc, "reason", None))
                     if faulted and fault_bump:
                         _bump_brick(model, data, brick_ids[part_id], _BUMP)

@@ -231,7 +231,7 @@ class ZebraPerceptionPublisher(Node):
         facing = (self.facing_of(pid) if self.facing_of is not None else None) or "UNKNOWN"
         self._publish(
             f"{pid},{status},{x:.4f},{y:.4f},{z:.4f},{lies},{yaw:.1f},{facing}",
-            f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}  {lies} {yaw:+.0f} deg {facing}",
+            f"{label}  {status:<8} {lies}, facing {facing}",
         )
 
     def _publish(self, line: str, shown: str) -> None:

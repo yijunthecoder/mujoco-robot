@@ -44,10 +44,9 @@ class FacingError(RuntimeError):
     can do it - retrying won't help, his tree escalates), "NEEDS_FLIP" (it turned over
     in the fingers), or None (worth a normal retry)."""
 
-    def __init__(self, message: str, reason: str | None = None, yaw: float | None = None):
+    def __init__(self, message: str, reason: str | None = None):
         super().__init__(message)
         self.reason = reason
-        self.yaw = yaw  # its full yaw as put back, if the show saw its print (else None)
 
 # The brick's full yaw at the stack for each facing (print = the brick's -y face:
 # at yaw 0 it points to world -Y).
@@ -195,7 +194,7 @@ def held_from_print_in_hand(ctx: ZebraArmContext, n_hand) -> float:
     return 0.0 if np.asarray(n_hand, float) @ held0 > 0 else float(np.pi)
 
 
-def show_and_look(ctx: ZebraArmContext, render, clock, look_print, idle=None) -> float | None:
+def show_and_look(ctx: ZebraArmContext, render, clock, look_print, idle=None, on_seen=None) -> float | None:
     """Hold the gripped brick up in front of SHOW_CAMERA and look at it, to learn how it's
     held: returns held_yaw, the brick's yaw relative to the grip (0 or pi - which way
     round the print is in the hand), or None if the camera can't tell or no show pose is
@@ -203,7 +202,8 @@ def show_and_look(ctx: ZebraArmContext, render, clock, look_print, idle=None) ->
     the camera sees it (unit vector, world), or None. Not the brick's yaw there: in the
     show pose it's turned and tilted - only its pose in the hand carries over to the
     table. The arm then goes back to where it started (above the pick spot). `idle`: see
-    _show_pose."""
+    _show_pose. `on_seen(ctx, None)`, if given, is called the moment the print is seen
+    (ctx.held_yaw set), before the arm comes back."""
     q = _show_pose(ctx, idle)
     if q is None:
         return None
@@ -218,6 +218,9 @@ def show_and_look(ctx: ZebraArmContext, render, clock, look_print, idle=None) ->
     held = None
     if n_print is not None:
         held = held_from_print(ctx, n_print)
+        if on_seen is not None:
+            ctx.held_yaw = held
+            on_seen(ctx, None)
     # back the same way to where it lifted the brick: the stack and a regrip are planned from
     # there (from the show pose the ways to the stack or back to the table were often refused)
     back = [path[-1] + (i / n) * (q0 - path[-1]) for i in range(1, n + 1)]
@@ -329,11 +332,12 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
     `other_xy` the other bricks: putting it back down is then aimed by where the brick
     really sits in the fingers (zebra_flip.set_down_kept) - after the show it sits a little
     off and tilted, and a plain put-back pushed one into the table and over.
-    `on_seen(ctx)`, if given, is called as soon as the show has seen the print, with
-    ctx.held_yaw the full one (the bridge reports the facing from then on).
+    `on_seen`, if given, is told whenever it's known which way the print points (the
+    bridge reports the facing from then on): `on_seen(ctx, None)` the moment the show sees
+    it (ctx holding it, ctx.held_yaw the full one), `on_seen(None, yaw)` once it's back on
+    the table at full yaw `yaw`.
     Returns (the context now holding it, with held_yaw the full one; how: "same grip",
-    "other grip" or "other arm"). Raises FacingError (brick put back; its `yaw` the full
-    one if the print was seen) or RuntimeError."""
+    "other grip" or "other arm"). Raises FacingError (brick put back) or RuntimeError."""
     def _put_down(ctx):  # returns where the brick's centre is now
         if look_held is None:
             put_back(ctx, render, clock)
@@ -342,7 +346,7 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
 
     c = contexts[arm]
     grasp_part(c, render, clock, center_xyz, relook=relook, depth=_SHOW_GRIP_DEPTH)
-    held = show_and_look(c, render, clock, look_print, idle)
+    held = show_and_look(c, render, clock, look_print, idle, on_seen)
     if still_upright is not None and still_upright(c.data) is False:
         # held up to the camera it can swing round between the fingertips (once all the way
         # over, in testing): put it back as it is - the tree re-locates it, and flips it if needed
@@ -350,10 +354,6 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         raise FacingError("it turned in the fingers while being shown - put it back (it may need flipping)",
                           "NEEDS_FLIP")
     yaw = _wrap(c.grip_yaw + held) if held is not None else None  # the brick's full yaw where it lay
-    if held is not None:
-        c.held_yaw = held
-        if on_seen is not None:
-            on_seen(c)
     turn = 0.0
     if held is not None:
         # no grip works from where it lies? put it back turned so that one does
@@ -369,6 +369,8 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
     look = relook()
     yaw_now = full_yaw_near(look[1], yaw) if look is not None and look[1] is not None else yaw
     centre_now = look[0] if look is not None else put_at
+    if on_seen is not None:
+        on_seen(None, yaw_now)  # back on the table, its print side known
     # the options: which arm, and which way round it should hold the brick (held_yaw 0 or pi)
     for holder, want_held, how in _facing_options(contexts, arm, held):
         if _can_pick_and_place(holder, centre_now, _wrap(yaw_now - want_held), yaw_now, place_xyz, facing_yaw):
@@ -388,7 +390,7 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
             holder.held_yaw = want_held
             return holder, how + (f", put down turned {np.degrees(turn):+.0f} deg first" if turn else "")
     raise FacingError("neither grip of either arm can set it down facing that way at the stack - put it back",
-                      "FACING_IMPOSSIBLE", yaw=yaw_now)
+                      "FACING_IMPOSSIBLE")
 
 
 def full_yaw_near(yaw_mod180: float, remembered: float) -> float:
