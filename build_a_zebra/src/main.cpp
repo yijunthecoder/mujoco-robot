@@ -675,10 +675,10 @@ public:
       return BT::NodeStatus::SUCCESS;
     }
 
-    if (result == "FAILED" || ++wait_ticks_ > 60) {
+    if (result == "FAILED" || ++wait_ticks_ > 240) {
       RCLCPP_WARN(
         logger_,
-        "[FLIP]    %s: FAILED (attempt %d)",
+        "[FLIP]    %s: FAILED (attempt %d) -- timeout after 120s",
         prettyPart(part_, roles_).c_str(), attempt_);
       return BT::NodeStatus::FAILURE;
     }
