@@ -39,8 +39,9 @@ All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
 terminal. The MuJoCo window opens and the arms stack legs -> body -> head
-on the green circle, finishing with `3 placed, 0 escalated` (~55-90s). Each
-brick is picked by the arm nearest to it (below).
+on the green circle, finishing with `3 placed, 0 escalated` (~55-90s, more
+when bricks have to be flipped first - see "Flipping" below). Each brick is
+picked by the arm nearest to it (below).
 Victor's tree picks every target: picks where perception last saw the brick,
 places at his stack positions. All positions, perception included, are the
 brick's origin in the MuJoCo world frame (his `INTERFACE.md`, section 2b).
@@ -81,11 +82,13 @@ everything, scattered in that arm's own area only:
 $ bash scripts/run_zebra.sh --arm left
 ```
 
-Checked headless (ideal perception, real physics): 50 seeds, 150/150
-bricks placed, 80 by the right arm and 70 by the left; 44 seeds used both
-arms. Place error 0.8 cm average (max 1.8 cm); the arms never came closer
-than 8.1 cm (median closest 19.5 cm). Right arm alone, in its own area: also
-150/150, max 1.6 cm. About half the bricks (72 of 150) were set down turned
+Checked headless (ideal perception, real physics, upright bricks): 50 seeds,
+149/150 bricks placed (150/150 before the fingers got twisting friction for
+flipping - see Notes; the one miss, seed 1's head, lands 2.1 cm off with 2 cm
+allowed, and 1.8 cm off even without it), 79 by the right arm and 70 by the
+left. Place error 0.9 cm average; the arms never came closer than 8.1 cm
+(median closest 19.5 cm). Right arm alone, in its own area: 150/150, max
+1.6 cm (measured before the friction change). About half the bricks (72 of 150) were set down turned
 180 deg (same footprint, printed face reversed): from most angles the square
 grip isn't reachable at the stack - it never happened from the fixed square
 spots.
@@ -108,17 +111,41 @@ part,STATUS,x,y,z,LYING,yaw
 
 LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, and yaw the angle in
 degrees (-90..90). The bridge log shows it too, e.g. seed 1's body:
-`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg`. His tree
-decides what to do about it. Only top-down grips exist so far, so if it still sends
-a pick for a brick that isn't upright, the bridge refuses before moving and
-reports `FAILED` with the reason ("body is ON_SIDE - can't grip it from the
-top"). Live with his tree: seed 129 (all upright) 3 placed, 0 escalated,
-both arms; seed 1 (body on its side) legs placed, body refused 4 times and
-escalated, head skipped - `1 placed, 2 escalated`.
+`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg`. A pick
+of a brick that isn't upright is refused before moving (only top-down grips
+exist): his tree sends **`flip`** first (its `EnsureUpright` step).
+
+**Flipping** (`src/mjrobots/zebra_flip.py`, called by the bridge's `flip`
+skill). The bridge turns the brick upright and sets it down on the table;
+his tree then picks and places it like any other. Which way it's done is
+decided here, not in his tree - the tree says *what* (flip the body), the
+bridge decides *how*:
+
+| brick lies | turn needed | how |
+|---|---|---|
+| on its side | 90 deg about its long side | **one hand** if the arm can reach: grip the two ends, roll the wrist 90 deg, set it down. Else **two hands**: A rolls 45 deg, B takes it by the middle and turns 45 deg |
+| on its end | 90 deg about its short side | two hands, 45 + 45 deg |
+| upside down | 180 deg | two hands, 90 + 90 deg (one wrist can't turn 180 deg) |
+
+A brick no safe plan fits is answered `FAILED` ("no way found to flip it
+(arms not moved)") and stays where it is; his tree retries, then escalates
+it to a human. Planned on a scratch copy first (nothing moves until a whole
+flip is known to work), in a separate process so the viewer and perception
+keep running. Over 30 dropped bricks (seeds 1-12): **18 can be flipped**
+(on its side 13/17, on its end 1/4, upside down 4/9; over 40 seeds upside
+down 8/26) - see Notes. Seeds to watch:
 
 ```bash
-$ bash scripts/run_zebra.sh --scatter 129
+$ bash scripts/run_zebra.sh --scatter 7      # legs and body flipped by one hand each, full zebra
+$ bash scripts/run_zebra.sh --scatter 3445   # legs (45+45) and head (on its end) by two hands, full zebra
+$ bash scripts/run_zebra.sh --scatter 12     # legs one hand, body two hands; head upside down, escalated
+$ bash scripts/run_zebra.sh --scatter 129    # all three land upright, nothing to flip
 ```
+
+A flip takes 25-60 s live, longer than his tree's 30 s flip timeout: the
+tree then marks the attempt `FAILED` and sends `flip` again, which finds the
+brick upright and succeeds at once - it works, but logs a false failure
+(asked Victor to raise the timeout to ~120 s).
 
 Confirm before moving (for the first real-robot runs): each arm move prints
 every joint's current angle, target, and change (flagging changes over
@@ -397,8 +424,9 @@ mujoco-robot/
 │   ├── camera_calibration.py      # aligns the 4 stationlite cameras into one shared frame
 │   ├── zebra_pick_place.py        # grasp/place one zebra brick via runtime IK
 │   ├── zebra_publisher.py         # perception: calibrated brick position -> ROS2
-│   ├── scatter.py                 # random brick start spots, inside the arm's reach zone
-│   └── zebra_skill_bridge.py      # executes zebra_bt pick/place commands + publishes perception
+│   ├── scatter.py                 # random brick start spots / drops, inside the arm's reach zone
+│   ├── zebra_flip.py              # turns a brick that isn't upright onto its studs (one hand or two)
+│   └── zebra_skill_bridge.py      # executes zebra_bt pick/place/flip commands + publishes perception
 ├── scripts/                       # CLI entry points for each module above, plus:
 │   ├── check_camera_agreement.py  # headless check: every camera agrees with ground truth
 │   ├── reach_map.py               # where each arm can pick+place; writes the scatter zones
@@ -481,6 +509,82 @@ what using the nearest arm per brick would cover: **288 green spots, up from
 arm is free.
 
 ![Either arm reach map](docs/reach_map_either.png)
+
+### Flipping bricks (2026-09-30 / 10-01)
+
+How `zebra_flip.py` got to where it is, with the measurements behind each
+choice. "Plan-only" = the planner's yes/no on a scratch copy; "physics" = the
+whole flip run headless with real physics and a noisy camera look.
+
+**Order the planner tries** (first that works wins): one hand setting the
+brick down near where it lay (6/10 cm) -> the two-hand strategies -> one hand
+setting it down further away (anywhere in the green zone, one spot per 6 cm).
+The far search is slow when nothing fits (~20 s), so it comes last. Every
+set-down spot is inside the green zone, so the brick can be picked up again.
+
+**Results**, 30 dropped bricks (seeds 1-12), plan-only, then physics:
+
+| | plans | physics |
+|---|---|---|
+| on its side, one hand | 8 | 10/10 upright |
+| on its side, two hands (45+45) | 5 | all tried upright (seeds 2, 3445, 5, 12) |
+| on its end, two hands | 1 | upright (seed 3445's head) |
+| upside down, two hands | 4 | 2 of 4 fail: B's re-aimed grip lands just out of reach (seeds 2 legs, 9 body) |
+| no plan | 12 | - |
+
+Planning: 7.1 s average, 15.6 s slowest (4 runs in parallel); a "no plan"
+answer takes ~20 s in the bridge.
+
+**Fixes found by watching flips fail:**
+
+- **Twisting friction on the fingers** (`condim="4"` in
+  `stationlite_converted.xml`): without it a brick held by its two ends spun
+  between the fingertips - the hand rolled, the brick didn't. The strength is
+  the bricks' torsional friction (MuJoCo takes the larger of the pair):
+
+  | twisting friction | normal pick/place (150) | flips (8) |
+  |---|---|---|
+  | none | 150 | - (brick spins) |
+  | 0.005 | 150 | 6 (an on-end brick slipped in A's hand) |
+  | **0.01 (used)** | 149 | 7 |
+  | 0.02 | 149 | 7 |
+  | 0.05 | 146 | 7 |
+
+  The one pick/place miss at 0.01 is 1.8 cm off even without the friction (a
+  placement accuracy limit, 2 cm allowed). The flip that fails at every value
+  is the upside-down seed 2 above.
+- **B grips only the middle.** B used to be allowed to grip 0.75-1.25 cm
+  above the middle (more poses fit past A's fingers). A brick held by its top
+  strip slid out of B's fingers on the way down: 5 of 6 bricks in physics,
+  and once live (seed 1's body landed upside down and was tossed around).
+- **One hand alone** for bricks on their side: the brick is already upright
+  in A's fingers after a 90 deg roll, so no handover is needed. It flips the
+  bricks that used to need the slipping handover (4 of 4 in physics). It
+  needs the rolled hand to reach the table without the gripper touching it
+  (kept 0.5 cm clear).
+- **Set-down aimed by a look at the held brick**, not by where the fingers
+  are: a brick held off its middle, set down as if centred, was pushed into
+  the table.
+- **A steps clear before going home** after the handover: the plan checks A's
+  way home with B where the plan put it, but B re-aims ~1 cm at where the
+  brick really hangs (seed 1: refused at 1.8 cm from B, 2 cm allowed).
+  Planning with extra margin instead lost plans (17 -> 12 of 30 at 0.3 cm).
+- **IK gives up on out-of-reach targets** after 100 iterations without
+  progress (`solve_ik_pose(give_up_after=...)`, planner only): ~80% of the
+  targets the planner tries are unreachable. Planning 44.7 -> 8.2 s average
+  over 30 bricks, the same plan every time.
+- **Planning in its own process**: in a thread it shared one CPU core with
+  the viewer, physics and cameras - seed 1's body took 42 s there, 18 s alone.
+
+**Tried and dropped:** upside down in two steps (one hand turns it onto its
+side, then the on-side flip): 2 more of 26 upside-down bricks, but a "no
+plan" answer took up to 44-69 s, past the 30 s flip timeout.
+
+**Still open:** a flip that fails halfway opens both hands, so the brick
+drops ~10 cm, next to the stack; upside-down coverage (8/26); B's re-aim out
+of reach; one hand for bricks on their end (untried); which way the print
+faces at the stack (perception only knows the angle up to 180 deg); the
+brick's 3D pose comes from the simulation (a stand-in for a detector).
 
 ## Menagerie location
 
