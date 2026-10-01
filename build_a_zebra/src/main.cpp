@@ -161,6 +161,12 @@ namespace zebra_bt
         return (it == messages_.end()) ? "" : it->second;
       }
 
+      std::string reason(const std::string & command_id)
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = reasons_.find(command_id);
+        return (it == reasons_.end()) ? "" : it->second;
+      }
 
     private:
       void statusCallback(const std_msgs::msg::String::SharedPtr message) //* Write to the map (statuses_)
@@ -177,14 +183,20 @@ namespace zebra_bt
           //? zebra_bt_node_2 | Failed <--- NEW
 
           //? Read optional "message" field (used for permanent failures)
-          std::string reason;
+          std::string message_text;
           if (payload.contains("message")) {
-            reason = payload.at("message").get<std::string>();
+            message_text = payload.at("message").get<std::string>();
+          }
+
+          std::string reason_code;
+          if (payload.contains("reason")) {
+            reason_code = payload.at("reason").get<std::string>();
           }
 
           std::lock_guard<std::mutex> lock(mutex_);
           statuses_[command_id] = execution_status;
-          messages_[command_id] = reason;
+          messages_[command_id] = message_text;
+          reasons_[command_id]  = reason_code ;
         } catch (const std::exception &) {
           // Ignore malformed status messages.
           // catch [Safety Net], try [do stuff might fail]
@@ -200,6 +212,7 @@ namespace zebra_bt
     std::mutex mutex_;
     std::unordered_map<std::string, std::string> statuses_;
     std::unordered_map<std::string, std::string> messages_;
+    std::unordered_map<std::string, std::string> reasons_;
     unsigned long next_command_id_{0};
   };
 
@@ -543,20 +556,21 @@ public:
 
     }
 
-    if (result == "FAILED") {
-      const std::string reason = bridge_->message(command_id_);
+    if (result == "FAILED") { 
+      const std::string reason_code = bridge_->reason(command_id_);
+      const std::string message_txt = bridge_->message(command_id_);
 
-      if (reason == "FACING_IMPOSSIBLE") {
+      if (reason_code == "FACING_IMPOSSIBLE") {
         wm_->setPartStatus(part_, PartStatus::ESCALATED);
-        RCLCPP_ERROR(logger_, "[PICK] %s: PERMANENT FAILURE -- facing impossible",
-                    prettyPart(part_, roles_).c_str());
+        RCLCPP_ERROR(logger_, "[PICK] %s: PERMANENT FAILURE -- %s",
+                    prettyPart(part_, roles_).c_str(), message_txt.c_str());
         return BT::NodeStatus::FAILURE;
       }
 
       // NEEDS_FLIP or any other reason → normal retry path
       wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
       RCLCPP_WARN(logger_, "[PICK] %s: FAILED (attempt %d) -- %s",
-                  prettyPart(part_, roles_).c_str(), attempt_, reason.c_str());
+      prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
       return BT::NodeStatus::FAILURE;
     }
 
