@@ -169,15 +169,23 @@
          collision geom). The margin removes the tie. -->
     <!-- The fingers (stationlite_converted.xml) have condim="4": finger-brick
          contacts also resist twisting about the contact normal, using the
-         bricks' 0.05 below (MuJoCo takes the larger value of the pair). With
-         the default condim 3 they only resist sliding, so a brick held by its
-         two ends pivoted freely between the fingertips - a two-hand flip
-         rolled the hand, not the brick (zebra_flip.py). Brick-table and
-         brick-brick contacts stay condim 3 (placing is unchanged). -->
+         bricks' 0.01 below (MuJoCo takes the larger value of the pair; the
+         fingers' own is the default 0.005). With the default condim 3 they
+         only resist sliding, so a brick held by its two ends pivoted freely
+         between the fingertips - a two-hand flip rolled the hand, not the
+         brick (zebra_flip.py). Brick-table and brick-brick contacts stay
+         condim 3.
+         Why 0.01 (measured 2026-09-30): normal pick/place over 50 scatters
+         placed 150/150 without twisting friction, 146 at 0.05, 149 at 0.01
+         and 0.02, 150 at 0.005; a set of 8 flips worked 7 at 0.05 / 0.02 /
+         0.01 but 6 at 0.005 (an on-end brick slipped in the first hand).
+         0.01 keeps every flip; its one pick/place miss (a head 2.1 cm off,
+         2 cm allowed) is 1.8 cm off even without twisting friction - a
+         placement accuracy limit, not a grip one. -->
     <body name="zebra_legs" pos="0.2 -0.15 -0.0842">
       <freejoint/>
       <geom name="zebra_legs_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
-        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+        material="collision_hidden" mass="0.03" friction="1.0 0.01 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_legs_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_legs_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_legs_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
@@ -186,7 +194,7 @@
     <body name="zebra_body" pos="0.2 0 -0.0842">
       <freejoint/>
       <geom name="zebra_body_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
-        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+        material="collision_hidden" mass="0.03" friction="1.0 0.01 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_body_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_body_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_body_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
@@ -195,7 +203,7 @@
     <body name="zebra_head" pos="0.2 0.15 -0.0842">
       <freejoint/>
       <geom name="zebra_head_collision" type="box" size="0.032 0.016 0.0192" pos="0 0 -0.0192"
-        material="collision_hidden" mass="0.03" friction="1.0 0.05 0.01" contype="1" conaffinity="1"/>
+        material="collision_hidden" mass="0.03" friction="1.0 0.01 0.01" contype="1" conaffinity="1"/>
       <geom type="mesh" mesh="zebra_head_white" material="print_white" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_head_black" material="print_black" mass="0" contype="0" conaffinity="0" group="2"/>
       <geom type="mesh" mesh="zebra_head_brown" material="print_brown" mass="0" contype="0" conaffinity="0" group="2"/>
