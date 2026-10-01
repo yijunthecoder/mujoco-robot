@@ -1,11 +1,8 @@
 """Refuse arm moves that would bring one arm too close to the other.
 
-Arm-vs-arm contacts are switched off in stationlite_pick_place.xml (the
-mesh-only links self-collide badly), so in the sim the arms would pass
-straight through each other - and nothing stopped a move that would crash
-them on the real robot. `ArmClearance.check` runs over a move's planned
-joint-space path (every waypoint, lead-in included) before the arm moves:
-it puts the moving arm - and the brick it's holding, carried along with the
+`ArmClearance.check` runs over a move's planned joint-space path 
+(every waypoint, lead-in included) before the arm moves:it puts 
+the moving arm - and the brick it's holding, carried along with the
 gripper - at each waypoint on a scratch copy of the state, and measures the
 closest distance to the other arm (which stays put: moves run one at a time).
 Closer than MIN_ARM_CLEARANCE anywhere raises ClearanceError, a kind of
