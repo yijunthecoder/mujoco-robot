@@ -4,15 +4,6 @@ A ``<camera>`` element's ``quat`` attribute is an orientation, not a target -
 MuJoCo has no "look at this point" option in the XML itself, so pointing a
 camera somewhere specific means computing that orientation yourself.
 
-This was written to fix the stationlite scene's cameras (headcam, refcam,
-left_handcam, right_handcam): they were first given the same quat as their
-own decorative mesh geom, on the assumption that "wherever the camera-shaped
-model faces" was a reasonable stand-in for "wherever the lens points." That
-assumption was wrong - verified numerically (see the project's own commit
-history / conversation notes), the cameras ended up 50-99 degrees off from
-anything useful. This function is the actual fix: a standard "look-at"
-construction, the same technique any 3D graphics or vision code uses to
-point a camera at something.
 """
 
 from __future__ import annotations

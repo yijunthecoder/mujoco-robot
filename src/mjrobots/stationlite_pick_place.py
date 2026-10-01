@@ -44,6 +44,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from . import sim_step
 from .gl import configure_gl
 from .pick_place import _RealtimeClock, _ThrottledSync
 
@@ -51,8 +52,26 @@ _DEFAULT_SCENE = (
     Path(__file__).resolve().parent.parent.parent / "stationlite" / "urdf" / "stationlite_pick_place.xml"
 )
 
-_GRIP_OPEN = (-0.0425, 0.0425)
-_GRIP_CLOSED = (-0.0425 * 0.4, 0.0425 * 0.4)  # visually close around the block
+# How far each finger travels from closed (0) to fully open: gripper_joint1
+# opens toward -0.0425, gripper_joint2 toward +0.0425 (their ctrlranges in
+# stationlite_pick_place.xml).
+_FINGER_TRAVEL = 0.0425
+
+
+def grip_to_ctrl(grip: float) -> np.ndarray:
+    """One gripper command - 0.0 fully closed, 1.0 fully open, the single
+    value a real gripper driver takes (and ABC's convention) - as this
+    model's two finger actuator targets."""
+    g = float(np.clip(grip, 0.0, 1.0))
+    return np.array([-g * _FINGER_TRAVEL, g * _FINGER_TRAVEL])
+
+
+_GRIP_OPEN = 1.0
+# Close all the way, like a real gripper's "close" - the fingers stop on
+# whatever is between them, squeezing it with the gripper actuators'
+# force limit (forcerange in stationlite_pick_place.xml), not at a
+# position picked to match one object's width.
+_GRIP_CLOSED = 0.0
 
 # left_joint1..6 / right_joint1..6, found by FK search against
 # stationlite_mujoco.urdf.
@@ -85,29 +104,33 @@ class _Arm:
         self.block_id = block_id
 
 
-def _move_to(model, data, render, clock, arm, arm_target, grip_target, steps, carry=None) -> None:
+def _move_to(model, data, render, clock, arm, arm_target, grip, steps, carry=None) -> None:
+    """Ramp the arm to `arm_target` joint angles and the gripper to `grip`
+    (0 closed .. 1 open) together over `steps` physics steps."""
     arm_start = data.ctrl[arm.arm_ctrl].copy()
     grip_start = data.ctrl[arm.grip_ctrl].copy()
     arm_target = np.asarray(arm_target, dtype=float)
-    grip_target = np.asarray(grip_target, dtype=float)
+    grip_target = grip_to_ctrl(grip)
     for i in range(steps):
         alpha = (i + 1) / steps
         data.ctrl[arm.arm_ctrl] = arm_start + alpha * (arm_target - arm_start)
         data.ctrl[arm.grip_ctrl] = grip_start + alpha * (grip_target - grip_start)
-        mujoco.mj_step(model, data)
+        sim_step.step(model, data)
         if carry is not None:
             carry()
         clock.tick()
         render.step()
 
 
-def _hold(model, data, render, clock, arm, grip_target, steps, carry=None) -> None:
+def _hold(model, data, render, clock, arm, grip, steps, carry=None) -> None:
+    """Keep the arm where it is and ramp the gripper to `grip` (0 closed ..
+    1 open) over `steps` physics steps."""
     grip_start = data.ctrl[arm.grip_ctrl].copy()
-    grip_target = np.asarray(grip_target, dtype=float)
+    grip_target = grip_to_ctrl(grip)
     for i in range(steps):
         alpha = (i + 1) / steps
         data.ctrl[arm.grip_ctrl] = grip_start + alpha * (grip_target - grip_start)
-        mujoco.mj_step(model, data)
+        sim_step.step(model, data)
         if carry is not None:
             carry()
         clock.tick()
@@ -117,7 +140,7 @@ def _hold(model, data, render, clock, arm, grip_target, steps, carry=None) -> No
 _IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
 
 
-def _make_carry(model, data, block_body_id, f1_name, f2_name):
+def _make_carry(model, data, block_body_id, f1_name, f2_name, keep_grasp_offset: bool = False):
     """Snap `block_body_id`'s freejoint to the named fingers' midpoint each step.
 
     Also holds orientation at identity (axis-aligned), not just position:
@@ -127,16 +150,28 @@ def _make_carry(model, data, block_body_id, f1_name, f2_name):
     blocks could each end up rotated tens of degrees in opposite directions,
     which stacks the centers correctly but leaves the faces nowhere near
     flush with each other.
+
+    `keep_grasp_offset=True` holds the body where it was when the carry
+    first ran, relative to the fingers, instead of putting its ORIGIN at the
+    finger midpoint. Needed when the origin isn't at the grip point - e.g.
+    the zebra bricks, whose origin sits ~2cm above their center: snapping
+    the origin to the fingers (aimed at the center) carried them ~2cm too
+    low, visibly sinking into the table while being picked up/set down.
+    Make a fresh carry per grasp so the offset is re-captured each time.
     """
     f1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f1_name)
     f2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f2_name)
     joint_id = model.body_jntadr[block_body_id]
     qpos_adr = model.jnt_qposadr[joint_id]
     dof_adr = model.jnt_dofadr[joint_id]
+    offset = None if keep_grasp_offset else np.zeros(3)
 
     def carry() -> None:
+        nonlocal offset
         mid = (data.xpos[f1_id] + data.xpos[f2_id]) / 2
-        data.qpos[qpos_adr : qpos_adr + 3] = mid
+        if offset is None:
+            offset = data.qpos[qpos_adr : qpos_adr + 3] - mid
+        data.qpos[qpos_adr : qpos_adr + 3] = mid + offset
         data.qpos[qpos_adr + 3 : qpos_adr + 7] = _IDENTITY_QUAT
         data.qvel[dof_adr : dof_adr + 6] = 0.0
         mujoco.mj_forward(model, data)
@@ -201,10 +236,10 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
     carry_right = _make_carry(model, data, block_right_id, "right_griperlj_link1", "right_griperlj_link2")
     carry_left = _make_carry(model, data, block_left_id, "left_griperlj_link1", "left_griperlj_link2")
 
-    clock = _RealtimeClock(dt=model.opt.timestep)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        render = _ThrottledSync(viewer, model)
+        render = _ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT)
 
         _pick_and_place(
             model, data, render, clock, right, carry_right, _HOVER_MID_RIGHT, _PLACE_MID_RIGHT, _TABLE_PLACE_XYZ
@@ -227,6 +262,6 @@ def run_demo(prefer_gl: str = "egl", scene_path: str | None = None) -> None:
         )
         print("[mjrobots] done - close the window to exit")
         while viewer.is_running():
-            mujoco.mj_step(model, data)
+            sim_step.step(model, data)
             clock.tick()
             render.step()

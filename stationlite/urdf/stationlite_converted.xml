@@ -56,12 +56,12 @@
                 <body name="left_griperlj_link1" pos="0.1733 0 0">
                   <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="left_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
-                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1" condim="4"/>
                 </body>
                 <body name="left_griperlj_link2" pos="0.1733 0 0">
                   <inertial pos="-0.074793 0.014951 -3.8e-05" quat="0.569153 0.568309 0.420086 0.420259" mass="0.05" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="left_gripper_joint2" type="slide" range="0 0.0425" actuatorfrcrange="-150 150" axis="0 1 0"/>
-                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2" condim="4"/>
                 </body>
               </body>
             </body>
@@ -98,12 +98,12 @@
                 <body name="right_griperlj_link1" pos="0.1733 0 0">
                   <inertial pos="-0.074793 -0.014951 3.8e-05" quat="0.420086 0.420259 0.569153 0.568309" mass="0.049996" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="right_gripper_joint1" type="slide" range="-0.0425 0" actuatorfrcrange="-150 150" axis="0 1 0"/>
-                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link1" condim="4"/>
                 </body>
                 <body name="right_griperlj_link2" pos="0.1733 0 0">
                   <inertial pos="-0.074793 0.014951 -3.8e-05" quat="0.569153 0.568309 0.420086 0.420259" mass="0.05" diaginertia="3.73692e-05 3.5808e-05 5.74376e-06"/>
                   <joint name="right_gripper_joint2" type="slide" range="0 0.0425" actuatorfrcrange="-150 150" axis="0 1 0"/>
-                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2"/>
+                  <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="griperlj_link2" condim="4"/>
                 </body>
               </body>
             </body>
