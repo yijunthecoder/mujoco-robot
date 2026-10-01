@@ -149,6 +149,33 @@ tree then marks the attempt `FAILED` and sends `flip` again, which finds the
 brick upright and succeeds at once - it works, but logs a false failure
 (asked Victor to raise the timeout to ~120 s).
 
+**Which way the print faces** (`src/mjrobots/zebra_facing.py`). Each brick has
+its print on one long face; on the stack it fits two ways round. A pick may
+carry `"desired_facing": "FORWARD"` (agreed with Victor: FORWARD = the print
+points to world -Y, the robot's right / the right of the headcam image;
+`BACKWARD` the other way). Without it, picks work as before. With it:
+
+1. pick the brick as usual, then **show it to the headcam**: hold it 50-65 cm
+   in front of it with a long face turned to it (from the table no camera can
+   tell which side the print is on: from above the long faces don't show, and
+   the headcam sees them 3-10 px tall; shown, 20-30 px);
+2. from which way the print points in the hand, work out how it's held;
+3. **put it back and pick it up again** with the grip that sets it down facing
+   that way - the same grip, the other one, or the other arm (tilted towards
+   the camera it shifts in the fingers, up to 1.3 cm / 18 deg; placed from that
+   grip, bricks landed off target or fell off the stack);
+4. place it at exactly that yaw. If no grip of either arm can reach that yaw at
+   the stack, the pick fails (`FAILED`, brick put back).
+
+Headless, upright scatters (seeds 4-30): 37 bricks placed, **every one facing
+FORWARD**, placed 0.9 cm off on average (max 1.8); 21 failed as "can't face
+that way" - the wrist can't reach every angle at the stack. A pick with a
+facing takes ~30 s headless (show + put back + pick again), longer live:
+asked Victor to raise the pick timeout to ~90 s. Seeing the print is a
+stand-in (`_print_look` in the bridge): the true side, but only when the
+headcam really has a usable view of a face (half of it unblocked, 20+ px) -
+whether 20-30 px is enough for a real detector is still to be checked.
+
 Confirm before moving (for the first real-robot runs): each arm move prints
 every joint's current angle, target, and change (flagging changes over
 0.5 rad), then waits - ENTER moves, `q` + ENTER refuses the move (the arm
@@ -427,6 +454,7 @@ mujoco-robot/
 │   ├── zebra_pick_place.py        # grasp/place one zebra brick via runtime IK
 │   ├── zebra_publisher.py         # perception: calibrated brick position -> ROS2
 │   ├── scatter.py                 # random brick start spots / drops, inside the arm's reach zone
+│   ├── zebra_facing.py            # picks a brick so its print faces a set way on the stack
 │   ├── zebra_flip.py              # turns a brick that isn't upright onto its studs (one hand or two)
 │   └── zebra_skill_bridge.py      # executes zebra_bt pick/place/flip commands + publishes perception
 ├── scripts/                       # CLI entry points for each module above, plus:

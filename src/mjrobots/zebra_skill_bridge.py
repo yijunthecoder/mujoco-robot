@@ -76,12 +76,14 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .scatter import UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
+from .scatter import STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
 from .stationlite_pick_place import _GRIP_OPEN, _hold
+from .zebra_facing import FACING_YAW, SHOW_CAMERA, FacingError, long_face_view, pick_facing
 from .zebra_flip import PlanningProcess, execute_flip
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
+    BRICK_HEIGHT,
     _DEFAULT_SCENE,
     ZebraArmContext,
     go_home,
@@ -95,6 +97,11 @@ COMMAND_TOPIC = "/zebra/skill_commands"
 STATUS_TOPIC = "/zebra/skill_status"
 # Looks averaged by the look again from hover (see `_relook` in run_bridge).
 _RELOOK_SAMPLES = 10
+# The print-side look (see `_print_look`): the headcam must see this share of a long
+# face unblocked, this tall in its image, to tell printed from blank (assumed - to be
+# checked on the real camera; shown 50-65 cm away a face is 20-30 px tall).
+_PRINT_LOOK_MIN_SHARE = 0.5
+_PRINT_LOOK_MIN_PX = 20.0
 # Noise of one simulated yaw look (see `_sim_brick_yaw`).
 _YAW_SIGMA = np.radians(2.0)
 
@@ -261,6 +268,7 @@ def run_bridge(
     zones = {a: Zone.load(a) for a in arms}
     bases = arm_bases(model, data)
     held_by: dict[str, str] = {}  # part id -> arm holding it (picked, not yet placed)
+    facing_yaw: dict[str, float] = {}  # part id -> yaw to place it at (picked with desired_facing)
     clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     fault_picks = 0  # picks of fault_part seen so far
@@ -324,6 +332,27 @@ def run_bridge(
                 yaw = _sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
                 return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
         return None
+
+    def _print_look(part_id: str):
+        """zebra_facing's `look_print`: which way the printed face points, as the headcam
+        sees the brick held up in front of it - or None if it can't tell. Stand-in for a
+        detector: the true direction plus ~3 deg noise, but only when the headcam really
+        has a usable view of a long face (zebra_facing.long_face_view: geometry, fingers
+        and arms blocking included) - seeing either face tells the side."""
+        def look(d):
+            share, px = long_face_view(model, d, SHOW_CAMERA, brick_ids[part_id])
+            if share < _PRINT_LOOK_MIN_SHARE or px < _PRINT_LOOK_MIN_PX:
+                return None
+            n = -d.xmat[brick_ids[part_id]].reshape(3, 3)[:, 1] + perception.rng.normal(0.0, 0.05, 3)
+            return n / np.linalg.norm(n)  # the print is on the brick's -y face
+        return look
+
+    def _stack_target(part_id: str) -> np.ndarray:
+        """Where this part will be placed (centre): Victor's stack spot and the part's level
+        (legs, body, head) - known at the pick so the grip can be chosen for the facing; the
+        place command's own target is what's used for the place."""
+        k = list(ALL_PART_IDS).index(part_id)
+        return np.array([STACK_XY[0], STACK_XY[1], TABLE_Z + _BRICK_CENTER_OFFSET_Z + k * BRICK_HEIGHT])
 
     def _flip_look(part_id: str):
         """execute_flip's `look`: a hand camera looking at the held brick (B's at the
@@ -432,7 +461,23 @@ def run_bridge(
                                 f"{PART_LABELS[part_id]} is {lies} - can't grip it from the top "
                                 f"(arm not moved; only upright bricks can be picked so far)"
                             )
-                        grasp_part(ctx, render, clock, center_xyz, relook=lambda: _relook(part_id))
+                        facing = command.get("desired_facing")
+                        if facing is not None:
+                            if facing not in FACING_YAW:
+                                raise ValueError(f"unknown desired_facing '{facing}' (use {'/'.join(FACING_YAW)})")
+                            try:
+                                ctx, how = pick_facing({a: contexts[(a, part_id)] for a in arms}, use, render, clock,
+                                                       center_xyz, _stack_target(part_id), FACING_YAW[facing],
+                                                       lambda: _relook(part_id), _print_look(part_id))
+                            except FacingError as exc:
+                                raise RuntimeError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}") from exc
+                            use = ctx.arm
+                            facing_yaw[part_id] = FACING_YAW[facing]
+                            node.get_logger().info(f"{use} arm: {PART_LABELS[part_id]} shown to the {SHOW_CAMERA}, "
+                                                   f"picked up again ({how}) to face {facing} at the stack")
+                        else:
+                            facing_yaw.pop(part_id, None)
+                            grasp_part(ctx, render, clock, center_xyz, relook=lambda: _relook(part_id))
                         relooked = (
                             "brick not visible from hover, kept the original aim"
                             if ctx.relook_shift is None
@@ -475,7 +520,7 @@ def run_bridge(
                                 )
                             return _relook(part_id)
 
-                        place_part(ctx, render, clock, center_xyz, verify=_verify)
+                        place_part(ctx, render, clock, center_xyz, verify=_verify, facing_yaw=facing_yaw.get(part_id))
                         held_by.pop(part_id, None)
                         node.get_logger().info(
                             f"{use} arm placed {part_id} (" + (

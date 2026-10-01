@@ -224,7 +224,7 @@ def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int 
         last = width
 
 
-def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> None:
+def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None, grip_yaws=None) -> None:
     """Approach, descend onto, and grip the brick at `center_xyz` (its
     geometric center, not its body origin - see `_BRICK_CENTER_OFFSET_Z`),
     then lift it clear of the table.
@@ -287,6 +287,8 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
             brick_yaw = float(seen_yaw)
 
     grips = sorted({_wrap(brick_yaw), _wrap(brick_yaw + np.pi)}, key=abs)
+    if grip_yaws is not None:  # a chosen grip only (zebra_facing: the one that gives the wanted facing)
+        grips = list(grip_yaws)
     grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, grips)
     ctx.held_yaw = _wrap(brick_yaw - grip_yaw)
     ctx.picked_from = center_xyz.copy()
@@ -307,7 +309,7 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None) -> 
     ctx.go(render, clock, hover_xyz)
 
 
-def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None) -> None:
+def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None, facing_yaw=None) -> None:
     """Carry the gripped brick to `center_xyz` (geometric center), set it
     down, and let go - no teleport: where the brick ends up is where physics
     leaves it when the fingers open.
@@ -324,7 +326,9 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None) -> 
     grip yaw that undoes `ctx.held_yaw` is tried first. If IK can't reach it
     (the arm's grip turn is narrower at the stack), the brick goes down
     turned 180 deg instead - same footprint, studs still line up, only the
-    printed face reversed (`ctx.placed_flipped`).
+    printed face reversed (`ctx.placed_flipped`). With `facing_yaw` (the brick's
+    full yaw wanted at the stack, print side included - zebra_facing) only that
+    one yaw is tried: turned 180 deg would put the print the wrong way round.
 
     `verify`, if given, looks at the brick once the arm has let go and backed
     up to hover - the same kind of function as grasp_part's `relook`,
@@ -335,8 +339,12 @@ def place_part(ctx: ZebraArmContext, render, clock, center_xyz, verify=None) -> 
     """
     hover_xyz = center_xyz + np.array([0, 0, _HOVER_DZ])
     ctx.go(render, clock, hover_xyz)
-    square, flipped = _wrap(-ctx.held_yaw), _wrap(np.pi - ctx.held_yaw)
-    ctx.placed_flipped = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, [square, flipped]) != square
+    if facing_yaw is not None:  # an exact yaw (print facing a set way: zebra_facing), no 180 deg fallback
+        _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, [_wrap(facing_yaw - ctx.held_yaw)])
+        ctx.placed_flipped = False
+    else:
+        square, flipped = _wrap(-ctx.held_yaw), _wrap(np.pi - ctx.held_yaw)
+        ctx.placed_flipped = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz, [square, flipped]) != square
     _hold(ctx.model, ctx.data, render, clock, ctx.this_arm, _GRIP_OPEN, 300)
     ctx.holding = False
     ctx.go(render, clock, hover_xyz)
