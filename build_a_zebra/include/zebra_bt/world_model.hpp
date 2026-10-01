@@ -27,6 +27,7 @@ namespace zebra_bt
   };
 
   enum class Orientation { UNKNOWN, UPRIGHT, UPSIDE_DOWN, ON_SIDE, ON_END };
+  enum class Facing      { UNKNOWN, FORWARD, BACKWARD };
 
   struct PartState
   {
@@ -36,7 +37,9 @@ namespace zebra_bt
       int pick_attempts{0};
 
       Orientation orientation{Orientation::UNKNOWN};
+      Facing      facing{Facing::UNKNOWN};
       int flip_attempts{0};
+      int rotate_attempts{0};
 
       std::chrono::steady_clock::time_point last_update
       {
@@ -48,6 +51,7 @@ namespace zebra_bt
 
   std::string toString(PartStatus status);
   std::string toString(Orientation orientation);
+  std::string toString(Facing facing);
 
   // WorldModel is the single source of truth for where each Zebra part is and
   // what state it's in. It subscribes to a ROS 2 topic where a
@@ -72,6 +76,9 @@ namespace zebra_bt
     void setOrientation(const std::string& id, Orientation o);
     int incrementFlipAttempts(const std::string& id);
     void resetFlipAttempts(const std::string& id);
+    void setFacing(const std::string & part_name, Facing f);
+    int  incrementRotateAttempts(const std::string & part_name);
+    void resetRotateAttempts(const std::string & part_name);
 
     // Built-in demo/testing helper for randomly relocating or "losing" parts
     // has moved to its own class -- see zebra_bt/disturbance_generator.hpp.

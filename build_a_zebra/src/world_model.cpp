@@ -41,6 +41,16 @@ namespace zebra_bt
     return "UNKNOWN";
   }
 
+  string toString(Facing f)
+  {
+    switch (f) {
+      case Facing::UNKNOWN:  return "UNKNOWN";
+      case Facing::FORWARD:  return "FORWARD";
+      case Facing::BACKWARD: return "BACKWARD";
+    }
+    return "UNKNOWN";
+  }
+
   WorldModel::WorldModel(const rclcpp::Node::SharedPtr & node,
                         const vector<string> & part_ids,
                         double perception_timeout_sec)
@@ -52,7 +62,9 @@ namespace zebra_bt
       p.status = PartStatus::UNKNOWN;
       p.pick_attempts = 0;
       p.orientation = Orientation::UNKNOWN;
+      p.facing = Facing::UNKNOWN;
       p.flip_attempts = 0;
+      p.rotate_attempts = 0;
       p.last_update = std::chrono::steady_clock::now();
       p.seen_by_perception = false;
       parts_[id] = p;
@@ -71,13 +83,14 @@ namespace zebra_bt
   void WorldModel::perceptionCallback(const std_msgs::msg::String::SharedPtr msg)
   {
     stringstream ss(msg->data);
-    string part, status_str, xs, ys, zs, orient_str;
+    string part, status_str, xs, ys, zs, orient_str, facing_str;
     if (!getline(ss, part, ',')) return;
     if (!getline(ss, status_str, ',')) return;
     getline(ss, xs, ',');
     getline(ss, ys, ',');
     getline(ss, zs, ',');
     getline(ss, orient_str, ',');
+    getline(ss, facing_str, ',');
 
     PartStatus status = PartStatus::UNKNOWN;
     if (status_str == "LOCATED") status = PartStatus::LOCATED;
@@ -120,6 +133,12 @@ namespace zebra_bt
       else if (orient_str == "ON_SIDE")       it->second.orientation = Orientation::ON_SIDE;
       else if (orient_str == "ON_END")        it->second.orientation = Orientation::ON_END;
       else                                    it->second.orientation = Orientation::UNKNOWN;
+    }
+
+    if (!facing_str.empty()) {
+      if (facing_str == "FORWARD")            it->second.facing = Facing::FORWARD;
+      else if (facing_str == "BACKWARD")      it->second.facing = Facing::BACKWARD;
+      else                                    it->second.facing = Facing::UNKNOWN;
     }
 
     it->second.last_update = std::chrono::steady_clock::now();
@@ -175,6 +194,25 @@ namespace zebra_bt
     lock_guard<mutex> lock(mutex_);
     parts_.at(part_name).orientation = o;
     parts_.at(part_name).last_update = std::chrono::steady_clock::now();
+  }
+
+    void WorldModel::setFacing(const string & part_name, Facing f)
+  {
+    lock_guard<mutex> lock(mutex_);
+    parts_.at(part_name).facing = f;
+    parts_.at(part_name).last_update = std::chrono::steady_clock::now();
+  }
+
+  int WorldModel::incrementRotateAttempts(const string & part_name)
+  {
+    lock_guard<mutex> lock(mutex_);
+    return ++parts_.at(part_name).rotate_attempts;
+  }
+
+  void WorldModel::resetRotateAttempts(const string & part_name)
+  {
+    lock_guard<mutex> lock(mutex_);
+    parts_.at(part_name).rotate_attempts = 0;
   }
 
   int WorldModel::incrementFlipAttempts(const string & part_name)

@@ -137,38 +137,37 @@ class MujocoExecutor(Node):
         return count
 
     # ------------------------------------------------------------------
-    # Flip: rotate the part so its studs point up.
-    # Sim-only: directly sets the free joint quaternion.
+    # Helper: find the free joint qpos address for a part
     # ------------------------------------------------------------------
-    def _do_flip(self, part_id):
-        # Find the body
+    def _find_free_joint_qpos_adr(self, part_id):
+        """Returns the qpos index where the part's free joint starts,
+        or -1 if not found."""
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, part_id)
         if body_id < 0:
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, f"zebra_{part_id}")
         if body_id < 0:
-            self.get_logger().error(f"flip: unknown body '{part_id}'")
-            return False
-
-        # Find the free joint on that body
-        joint_id = -1
+            return -1
         for j in range(self.model.njnt):
             if (self.model.jnt_bodyid[j] == body_id and
                     self.model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE):
-                joint_id = j
-                break
-        if joint_id < 0:
+                return self.model.jnt_qposadr[j]
+        return -1
+
+    # ------------------------------------------------------------------
+    # Flip: rotate the part so its studs point up (upside_down -> upright).
+    # Sim-only: directly sets the free joint quaternion to identity.
+    # ------------------------------------------------------------------
+    def _do_flip(self, part_id):
+        qpos_adr = self._find_free_joint_qpos_adr(part_id)
+        if qpos_adr < 0:
             self.get_logger().error(
-                f"flip: no free joint on '{part_id}' (welded to world?)")
+                f"flip: unknown body or no free joint on '{part_id}'")
             return False
 
-        qpos_adr = self.model.jnt_qposadr[joint_id]
-
-        # Step the sim a bit for realism
         self._drive([], [], [], [], seconds=0.3)
 
-        # Set the quaternion to (w=1, x=0, y=0, z=0) — identity = upright.
-        # If your scene.xml defines "upright" differently, adjust here.
+        # Identity quaternion = upright (assuming scene spawns them upright)
         self.data.qpos[qpos_adr + 3] = 1.0   # qw
         self.data.qpos[qpos_adr + 4] = 0.0   # qx
         self.data.qpos[qpos_adr + 5] = 0.0   # qy
@@ -176,6 +175,41 @@ class MujocoExecutor(Node):
         mujoco.mj_forward(self.model, self.data)
 
         self.get_logger().info(f"flip: {part_id} rotated to upright")
+        self._drive([], [], [], [], seconds=0.5)
+        return True
+
+    # ------------------------------------------------------------------
+    # Rotate: spin the part 180deg around the world vertical axis.
+    # Fixes "upright but facing backward".
+    # ------------------------------------------------------------------
+    def _do_rotate(self, part_id):
+        qpos_adr = self._find_free_joint_qpos_adr(part_id)
+        if qpos_adr < 0:
+            self.get_logger().error(
+                f"rotate: unknown body or no free joint on '{part_id}'")
+            return False
+
+        self._drive([], [], [], [], seconds=0.3)
+
+        # Compose current quat with 180deg about Z:
+        #   q_new = q_old * (0, 0, 0, 1)
+        qw = self.data.qpos[qpos_adr + 3]
+        qx = self.data.qpos[qpos_adr + 4]
+        qy = self.data.qpos[qpos_adr + 5]
+        qz = self.data.qpos[qpos_adr + 6]
+
+        new_w = -qz
+        new_x = -qy
+        new_y =  qx
+        new_z =  qw
+
+        self.data.qpos[qpos_adr + 3] = new_w
+        self.data.qpos[qpos_adr + 4] = new_x
+        self.data.qpos[qpos_adr + 5] = new_y
+        self.data.qpos[qpos_adr + 6] = new_z
+        mujoco.mj_forward(self.model, self.data)
+
+        self.get_logger().info(f"rotate: {part_id} spun 180deg about Z")
         self._drive([], [], [], [], seconds=0.5)
         return True
 
@@ -206,7 +240,7 @@ class MujocoExecutor(Node):
         ).start()
 
     # ------------------------------------------------------------------
-    # The actual pick / place sequences
+    # The actual pick / place / flip / rotate sequences
     # ------------------------------------------------------------------
     def _execute(self, command_id, skill, part_id):
         try:
@@ -240,10 +274,17 @@ class MujocoExecutor(Node):
                 self._drive(self.arm_ids_r, self.gripper_ids_r,
                             R_PLACE, GRIP_CLOSED, seconds=0.6)
                 self._drive(self.arm_ids_r, self.gripper_ids_r, R_LIFT, GRIP_CLOSED)
+
             elif skill == "flip":
                 if not self._do_flip(part_id):
                     self._report(command_id, "FAILED", "flip failed")
                     return
+
+            elif skill == "rotate":
+                if not self._do_rotate(part_id):
+                    self._report(command_id, "FAILED", "rotate failed")
+                    return
+
             else:
                 self.get_logger().warn(f"Unknown skill '{skill}'")
                 self._report(command_id, "FAILED", f"unknown skill {skill}")
@@ -270,7 +311,7 @@ class MujocoExecutor(Node):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def main():    
+def main():
     model = mujoco.MjModel.from_xml_path(
         "install/build_a_zebra/share/build_a_zebra/stationlite_mujoco/scene.xml")
     data = mujoco.MjData(model)

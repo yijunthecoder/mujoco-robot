@@ -189,10 +189,13 @@ namespace zebra_bt
   class QuietLogger : public BT::StatusChangeLogger
   {
   public:
+    //? Runs once. Takes the ROOT so the parent can hook (attach a doorbell) into every node.
     explicit QuietLogger(BT::TreeNode * root)
     : BT::StatusChangeLogger(root)
     {}
 
+    //? Runs every time ANY (doorbell) node changes status.
+    //? `node` = whichever one changed (not the root).
     void callback(
       BT::Duration,
       const BT::TreeNode & node,
@@ -201,41 +204,42 @@ namespace zebra_bt
     {
       if (prev != BT::NodeStatus::RUNNING) return;
 
-      std::cout << "    [BT] " << std::left << std::setw(24)
+      std::cout << "    [BT] " << std::left  << std::setw(24)
                 << node.name() << "  "
                 << BT::toStr(prev) << " -> " << BT::toStr(curr)
                 << "\n";
     }
 
+  //? Push out whatever is in the output to somewhere else [Not using]
   void flush() override {}
 };
 
-// ---------------------------------------------------------------------
+//! ---------------------------------------------------------------------
 // Condition nodes.
-// ---------------------------------------------------------------------
+//! ---------------------------------------------------------------------
 
-class IsPartPlaced : public BT::ConditionNode
-{
-public:
-  IsPartPlaced(const std::string & name, const BT::NodeConfig & config,
-               WorldModelPtr wm)
-  : BT::ConditionNode(name, config), wm_(wm) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus tick() override
+  class IsPartPlaced : public BT::ConditionNode
   {
-    std::string part;
-    getInput("part", part);
-    return wm_->getPartState(part).status == PartStatus::PLACED
-      ? BT::NodeStatus::SUCCESS
-      : BT::NodeStatus::FAILURE;
-  }
+  public:
+    IsPartPlaced(const std::string & name, const BT::NodeConfig & config,
+                WorldModelPtr wm)
+    : BT::ConditionNode(name, config), wm_(wm) {}
 
-private:
-  WorldModelPtr wm_;
-};
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus tick() override
+    {
+      std::string part;
+      getInput("part", part);
+      return wm_->getPartState(part).status == PartStatus::PLACED
+        ? BT::NodeStatus::SUCCESS
+        : BT::NodeStatus::FAILURE;
+    }
+
+  private:
+    WorldModelPtr wm_;
+  };
 
 class IsPartLocated : public BT::ConditionNode
 {
@@ -299,6 +303,30 @@ public:
     std::string part;
     getInput("part", part);
     return wm_->getPartState(part).orientation == Orientation::UPRIGHT
+      ? BT::NodeStatus::SUCCESS
+      : BT::NodeStatus::FAILURE;
+  }
+
+private:
+  WorldModelPtr wm_;
+};
+
+class IsPartFacingForward : public BT::ConditionNode
+{
+public:
+  IsPartFacingForward(const std::string & name, const BT::NodeConfig & config,
+                      WorldModelPtr wm)
+  : BT::ConditionNode(name, config), wm_(wm) {}
+
+  static BT::PortsList providedPorts()
+  { return {BT::InputPort<std::string>("part")}; }
+
+  BT::NodeStatus tick() override
+  {
+    std::string part;
+    getInput("part", part);
+    const auto f = wm_->getPartState(part).facing;
+    return (f == Facing::FORWARD || f == Facing::UNKNOWN)
       ? BT::NodeStatus::SUCCESS
       : BT::NodeStatus::FAILURE;
   }
@@ -671,6 +699,72 @@ private:
   int wait_ticks_{0};
 };
 
+class RotatePart : public BT::StatefulActionNode
+{
+public:
+  RotatePart(const std::string & name, const BT::NodeConfig & config,
+             WorldModelPtr wm, SkillBridgePtr bridge,
+             RolesMapPtr roles, rclcpp::Logger logger)
+  : BT::StatefulActionNode(name, config),
+    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+
+  static BT::PortsList providedPorts()
+  { return {BT::InputPort<std::string>("part")}; }
+
+  BT::NodeStatus onStart() override
+  {
+    getInput("part", part_);
+    const auto state = wm_->getPartState(part_);
+
+    attempt_ = wm_->incrementRotateAttempts(part_);
+    command_id_ = bridge_->send("rotate", part_, state.position);
+
+    RCLCPP_INFO(
+      logger_,
+      "[ROTATE]  %s: attempt %d (was %s)  [%s]",
+      prettyPart(part_, roles_).c_str(),
+      attempt_,
+      zebra_bt::toString(state.facing).c_str(),
+      command_id_.c_str());
+
+    wait_ticks_ = 0;
+    return BT::NodeStatus::RUNNING;
+  }
+
+  BT::NodeStatus onRunning() override
+  {
+    const std::string result = bridge_->status(command_id_);
+
+    if (result == "SUCCEEDED") {
+      wm_->setFacing(part_, Facing::FORWARD);
+      wm_->resetRotateAttempts(part_);
+      RCLCPP_INFO(logger_, "[ROTATE]  %s: SUCCESS (attempt %d)",
+                  prettyPart(part_, roles_).c_str(), attempt_);
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    if (result == "FAILED" || ++wait_ticks_ > 60) {
+      RCLCPP_WARN(logger_, "[ROTATE]  %s: FAILED (attempt %d)",
+                  prettyPart(part_, roles_).c_str(), attempt_);
+      return BT::NodeStatus::FAILURE;
+    }
+
+    return BT::NodeStatus::RUNNING;
+  }
+
+  void onHalted() override {}
+
+private:
+  WorldModelPtr wm_;
+  SkillBridgePtr bridge_;
+  RolesMapPtr roles_;
+  rclcpp::Logger logger_;
+  std::string part_;
+  std::string command_id_;
+  int attempt_{0};
+  int wait_ticks_{0};
+};
+
 class RecoveryPolicy : public BT::DecoratorNode
 {
 public:
@@ -902,6 +996,16 @@ int main(int argc, char ** argv)
       return std::make_unique<zebra_bt::RecoveryPolicy>(
         n, c, world_model, recovery_manager, roles, node->get_logger()); });
 
+  factory.registerBuilder<zebra_bt::IsPartFacingForward>("IsPartFacingForward",
+  [world_model](const std::string & n, const BT::NodeConfig & c) {
+    return std::make_unique<zebra_bt::IsPartFacingForward>(n, c, world_model); });
+
+  factory.registerBuilder<zebra_bt::RotatePart>("RotatePart",
+  [world_model, skill_bridge, roles, node]
+  (const std::string & n, const BT::NodeConfig & c) {
+    return std::make_unique<zebra_bt::RotatePart>(
+      n, c, world_model, skill_bridge, roles, node->get_logger()); });
+
   std::string tree_file =
     ament_index_cpp::get_package_share_directory("build_a_zebra") +
     "/trees/zebra_tree.xml";
@@ -926,9 +1030,9 @@ int main(int argc, char ** argv)
   auto print_status_board = [&](int tick) {
     const double secs = tick / TICK_HZ;
     std::printf("\n──── ZEBRA  ·  %.1fs  ·  step %d ────\n", secs, tick);
-    std::printf("  %-8s  %-12s  %-12s  %-8s  %s\n",
-                "PART", "STATUS", "ORIENT", "ATTEMPTS", "MEANING");
-    std::printf("  ────────  ────────────  ────────────  ────────  ───────\n");
+    std::printf("  %-8s  %-12s  %-12s  %-10s  %-8s  %s\n",
+                "PART", "STATUS", "ORIENT", "FACING", "ATTEMPTS", "MEANING");
+    std::printf("  ────────  ────────────  ────────────  ──────────  ────────  ───────\n");
     for (const auto & id : part_ids) {
       const auto st = world_model->getPartState(id);
       const std::string label = (*roles).count(id) ? (*roles)[id] : id;
@@ -944,12 +1048,13 @@ int main(int argc, char ** argv)
         case PartStatus::ESCALATED:   meaning = "gave up, needs human"; break;
       }
       
-      std::printf("  %-8s  %-12s  %-12s  %-8d  %s\n",
-                  label.c_str(),
-                  zebra_bt::toString(st.status).c_str(),
-                  zebra_bt::toString(st.orientation).c_str(),
-                  st.pick_attempts,
-                  meaning);
+    std::printf("  %-8s  %-12s  %-12s  %-10s  %-8d  %s\n",
+                label.c_str(),
+                zebra_bt::toString(st.status).c_str(),
+                zebra_bt::toString(st.orientation).c_str(),
+                zebra_bt::toString(st.facing).c_str(),
+                st.pick_attempts,
+                meaning);
     }
     std::cout << "──────────────────────────────────────\n\n";
   };
