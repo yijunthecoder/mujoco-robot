@@ -42,7 +42,13 @@
         </Fallback>
 
         <RecoveryPolicy part="{part}">
-          <PickPart part="{part}"/>
+          <Sequence name="PoseAndPick">
+            <Fallback name="EnsureUpright">
+              <IsPartUpright part="{part}"/>
+              <FlipPart part="{part}"/>
+            </Fallback>
+            <PickPart part="{part}"/>
+          </Sequence>
         </RecoveryPolicy>
 
         <PlacePart part="{part}"/>

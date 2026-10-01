@@ -531,7 +531,7 @@ public:
   BT::NodeStatus onRunning() override
   {
     const std::string result = bridge_->status(command_id_);
-    
+
     if (result == "SUCCEEDED") {
       wm_->setPartStatus(part_, PartStatus::PICKED);
       wm_->resetPickAttempts(part_);
@@ -540,27 +540,23 @@ public:
         "[PICK]    %s: SUCCESS (attempt %d)",
         prettyPart(part_, roles_).c_str(), attempt_);
       return BT::NodeStatus::SUCCESS;
+
     }
 
     if (result == "FAILED") {
       const std::string reason = bridge_->message(command_id_);
 
-      // Permanent failure: executor says retrying won't help (e.g. can't face FORWARD).
-      // Escalate straight away instead of burning retries.
-      if (reason.find("facing") != std::string::npos) {
+      if (reason == "FACING_IMPOSSIBLE") {
         wm_->setPartStatus(part_, PartStatus::ESCALATED);
-        RCLCPP_ERROR(
-          logger_,
-          "[PICK]    %s: PERMANENT FAILURE -- %s",
-          prettyPart(part_, roles_).c_str(), reason.c_str());
+        RCLCPP_ERROR(logger_, "[PICK] %s: PERMANENT FAILURE -- facing impossible",
+                    prettyPart(part_, roles_).c_str());
         return BT::NodeStatus::FAILURE;
       }
 
+      // NEEDS_FLIP or any other reason → normal retry path
       wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
-      RCLCPP_WARN(
-        logger_,
-        "[PICK]    %s: FAILED (attempt %d) -- %s",
-        prettyPart(part_, roles_).c_str(), attempt_, reason.c_str());
+      RCLCPP_WARN(logger_, "[PICK] %s: FAILED (attempt %d) -- %s",
+                  prettyPart(part_, roles_).c_str(), attempt_, reason.c_str());
       return BT::NodeStatus::FAILURE;
     }
 
