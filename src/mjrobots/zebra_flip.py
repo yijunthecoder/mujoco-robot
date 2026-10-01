@@ -56,7 +56,9 @@ import numpy as np
 from . import cartesian_control
 from . import zebra_pick_place as zpp
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, move_to_pose, solve_ik_pose
-from .scatter import MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_CLEAR, STACK_XY, TABLE_Z, UPSIDE_DOWN, Zone, lying
+from .scatter import (
+    MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_CLEAR, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, Zone, lying,
+)
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_pick_place import (
     BRICK_HEIGHT, ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _close_and_settle, _oriented_approach,
@@ -356,12 +358,12 @@ class _Planner:
         """A picks it by the ends, rolls its hand the whole 90 deg (the brick is then
         upright in its fingers), lowers it onto a set-down spot (`far`: see
         set_down_spots) and lets go."""
-        cfg = _CASES[lies]
+        wA = _CASES[ON_SIDE]["wA"]  # fingers across the long side: the ends
         other = "left" if a_side == "right" else "right"
         d, ctx = self.fresh()
         cA = ctx[a_side]
         with _plan_only():
-            picked = self.pick(d, cA, Rb0, center, cfg["a_axis"])
+            picked = self.pick(d, cA, Rb0, center, 0)
             if picked is None:
                 return None
             grip_a, Rgrasp, _, rel, q_lift = picked
@@ -370,12 +372,15 @@ class _Planner:
             # the brick centre relative to A's grip point is fixed in A's hand
             off_hand = HAND_LOCAL_OFFSET - rel[0] - rel[1] @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
             for sgn in (1, -1):
-                if (_rot(fA, sgn * cfg["total"]) @ Rb0)[2, 2] < 0.99:
+                if lying(_rot(fA, sgn * np.pi / 2) @ Rb0) != UPRIGHT:
                     continue  # this way round ends upside down
                 for gam in _YAW_TURNS:
-                    RA = _rot([0, 0, 1.0], gam) @ _rot(fA, sgn * cfg["total"]) @ Rgrasp
+                    RA = _rot([0, 0, 1.0], gam) @ _rot(fA, sgn * np.pi / 2) @ Rgrasp
                     hold = RA @ off_hand
+                    # the brick centre's height above the table once set down (from its box size)
+                    height = float(np.abs((RA @ rel[1])[2]) @ self.model.geom_size[self.brick_geoms[0]])
                     for spot in self.set_down_spots(center, far):
+                        spot = np.array([spot[0], spot[1], TABLE_TOP + height])
                         d.qpos[:], d.ctrl[:] = after_lift
                         mujoco.mj_forward(self.model, d)
                         hover = spot + hold + [0, 0, _HOVER_DZ]
@@ -391,7 +396,7 @@ class _Planner:
                                          path_check=cA._check_clearance)
                         except IKError:
                             continue
-                        self.set_fingers(d, cA, cfg["wA"])
+                        self.set_fingers(d, cA, wA)
                         mujoco.mj_kinematics(self.model, d)
                         if self.geo.dist(d, self.geo.grip[a_side], self.geo.table) < _MIN_TABLE_GAP:
                             continue  # the sideways gripper would hit the table
@@ -402,7 +407,7 @@ class _Planner:
                             go_home(cA, None, None)
                         except IKError:
                             continue
-                        return SoloPlan(lies, a_side, grip_a, center.copy(), cfg["wA"], q_h, spot, _quat(RA), hold)
+                        return SoloPlan(lies, a_side, grip_a, center.copy(), wA, q_h, spot, _quat(RA), hold)
         return None
 
     # --- one strategy, two hands ---
@@ -534,12 +539,15 @@ class _Planner:
     def plan(self, lies, Rb0, center):
         """Quick and likely first: one hand setting it down near where it lay (on its
         side), then the two-hand strategies, then one hand with the far spots (slow when
-        nothing fits: tried last, so a two-hand brick isn't kept waiting ~20 s)."""
+        nothing fits: tried last, so a two-hand brick isn't kept waiting ~20 s).
+        Tried and dropped (2026-10-01): upside down in two steps (one hand onto its side,
+        then the on-side flip) planned 2 more of 26 upside-down bricks, but made a
+        "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout."""
         cfg = _CASES[lies]
         solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies == ON_SIDE else []
         two = [lambda side, r=r: self.attempt(lies, Rb0, center, side, r) for r in cfg["rolls"]]
-        far = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies == ON_SIDE else []
-        for strategies in (solo, two, far):
+        slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies == ON_SIDE else []
+        for strategies in (solo, two, slow):
             for a_side in self.arms_order:
                 for strategy in strategies:
                     p = strategy(a_side)
