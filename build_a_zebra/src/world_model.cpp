@@ -90,7 +90,7 @@ namespace zebra_bt
     getline(ss, ys, ',');
     getline(ss, zs, ',');
     getline(ss, orient_str, ',');
-    getline(ss, yaw_str, ',')
+    getline(ss, yaw_str, ',');
     getline(ss, facing_str, ',');
 
     PartStatus status = PartStatus::UNKNOWN;
