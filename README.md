@@ -113,10 +113,12 @@ LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, yaw the angl
 degrees (-90..90), and FACING which way the printed face points (`FORWARD` =
 towards world -Y / `BACKWARD`). From the table no camera can tell, so a brick
 is `UNKNOWN` until a pick with `desired_facing` has seen its print (shown to the
-headcam, or B's hand camera at a flip handover); from then on it's known while
-held (arm joints + how it sits in the hand) and once placed (`_known_facing` in
-the bridge; checked against the sim's truth: 82 of 82 values right on seeds
-13/17/21). The bridge log shows it too, e.g. seed 1's body:
+headcam, or B's hand camera at a flip handover); from that moment it's known -
+while held (arm joints + how it sits in the hand), put back on the table (also
+when it can't be placed facing FORWARD) and placed (`_known_facing` in the
+bridge). Pointing within 20 deg of sideways it stays `UNKNOWN` (in the hand the
+brick can turn ~18 deg). Checked against the sim's truth on 9 bricks: every
+value right. The bridge log shows it too, e.g. seed 1's body:
 `body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg UNKNOWN`. A pick
 of a brick that isn't upright is refused before moving (only top-down grips
 exist): his tree sends **`flip`** first (its `EnsureUpright` step).
@@ -183,7 +185,10 @@ points to world -Y, the robot's right / the right of the headcam image;
 3. **put it back and pick it up again** with the grip that sets it down facing
    that way - the same grip, the other one, or the other arm (tilted towards
    the camera it shifts in the fingers, up to 1.3 cm / 18 deg; placed from that
-   grip, bricks landed off target or fell off the stack);
+   grip, bricks landed off target or fell off the stack). If no grip works
+   from where it lies, it's **put back turned** (30, 60 ... 150 deg, the
+   wrist turning as it sets it down) so that one does - only a turn whose grip
+   still works if it lands 5 deg / 1 cm off (`_regrip_turn`);
 4. place it at exactly that yaw. If no grip of either arm can reach that yaw at
    the stack, the pick fails (`FAILED`, brick put back) with
    `"reason": "FACING_IMPOSSIBLE"`, so Victor's tree escalates at once instead
@@ -191,9 +196,11 @@ points to world -Y, the robot's right / the right of the headcam image;
    `"reason": "NEEDS_FLIP"` (his retry re-checks upright and flips it); one
    whose print couldn't be seen gets no reason (a normal retry).
 
-Headless, upright scatters (seeds 4-30): 37 bricks placed, **every one facing
-FORWARD**, placed 0.9 cm off on average (max 1.8); 21 failed as "can't face
-that way" - the wrist can't reach every angle at the stack. A pick with a
+Headless, upright scatters (seeds 4-30): 53 bricks placed, **every one facing
+FORWARD**, 1.0 cm off on average (max 1.8), all three in 12 of the 27 seeds;
+14 failed as "can't face that way" (the wrist can't reach every angle at the
+stack, not even after a turned put-back) and one slid 2.1 cm off the stack.
+Without the turned put-back: 38 placed, 7 full zebras, 20 failed. A pick with a
 facing takes ~30 s headless (show + put back + pick again), longer live:
 asked Victor to raise the pick timeout to ~90 s. Seeing the print is a
 stand-in (`_print_look` in the bridge): the true side, but only when the

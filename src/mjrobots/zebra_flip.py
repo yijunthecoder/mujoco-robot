@@ -716,8 +716,12 @@ def _set_down_seen(ctx: ZebraArmContext, render, clock, set_down, quat, look) ->
     held by its ends swivelled out of upright - seed 3445's head)."""
     model, data = ctx.model, ctx.data
     _, center_seen = look(data)
-    grip_point = data.xpos[ctx.body_id] + data.xmat[ctx.body_id].reshape(3, 3) @ HAND_LOCAL_OFFSET
-    target = set_down + (grip_point - center_seen)
+    R_hand = data.xmat[ctx.body_id].reshape(3, 3)
+    grip_point = data.xpos[ctx.body_id] + R_hand @ HAND_LOCAL_OFFSET
+    # where the brick will sit from the grip point once the hand is turned to `quat`: the
+    # offset seen now turns with the hand (a put-back turned 30 deg landed 1.7 cm off without this)
+    offset = _mat(quat) @ R_hand.T @ (center_seen - grip_point)
+    target = set_down - offset
     hover = target + [0, 0, _HOVER_DZ]
     move_to_pose(model, data, render, clock, ctx.arm_ctrl, ctx.body_id, HAND_LOCAL_OFFSET, ctx.joint_ids,
                  hover, quat, lead_in_step=_HELD_JOINT_STEP, path_check=ctx._check_clearance)

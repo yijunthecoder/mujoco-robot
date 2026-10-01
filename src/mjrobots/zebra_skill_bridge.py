@@ -111,6 +111,9 @@ _RELOOK_SAMPLES = 10
 # checked on the real camera; shown 50-65 cm away a face is 20-30 px tall).
 _PRINT_LOOK_MIN_SHARE = 0.5
 _PRINT_LOOK_MIN_PX = 20.0
+# Perception's FACING says UNKNOWN when the print points within this of sideways (world
+# +-X) - see _known_facing.
+_FACING_SIDEWAYS = np.radians(20.0)
 # Noise of one simulated yaw look (see `_sim_brick_yaw`).
 _YAW_SIGMA = np.radians(2.0)
 
@@ -282,7 +285,7 @@ def run_bridge(
     facing_yaw: dict[str, float] = {}  # part id -> yaw to place it at (picked with desired_facing)
     # Once a camera has seen which side a brick's print is on (the show to the headcam, or
     # B's hand camera at a flip handover) - for perception's FACING field (_known_facing):
-    print_in_hand: set[str] = set()  # held, and ctx.held_yaw (brick vs grip) is the full one
+    print_seen_by: dict[str, str] = {}  # part id -> arm holding it, its ctx.held_yaw the full one
     print_yaw: dict[str, float] = {}  # placed: its full yaw on the stack
     clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
@@ -407,25 +410,38 @@ def run_bridge(
         convention), "BACKWARD", or None (sent as UNKNOWN) - only for a brick whose
         print side a camera has seen. From the table nothing can tell (the print is on a
         side face, 3-10 px in the headcam), so until a pick shows it, it's unknown.
-        Held: the brick's yaw is the hand's turn about vertical (arm joints) plus how
-        it sits in the hand (held_yaw, from the look). Placed: the yaw it was set down at,
-        kept up to date with the yaw look (`_sim_brick_yaw`, only known up to 180 deg -
-        the remembered one decides which way round). Not upright any more: unknown."""
+        Held (from the show on, also while shown and put back): the print's direction
+        is the hand's rotation (arm joints) applied to where the print is in the hand
+        (held_yaw, from the look) - right however the hand is tilted. On the table (put
+        back after the show, or placed): its full yaw, kept up to date with the yaw look
+        (`_sim_brick_yaw`, only known up to 180 deg - the remembered one decides which
+        way round). Not upright any more: unknown. Pointing within _FACING_SIDEWAYS of
+        sideways (world +-X) it's unknown too: in the hand the brick can turn up to ~18
+        deg, and calling that side FORWARD/BACKWARD was wrong 3 times in 28 (seed 4 head)."""
         b = brick_ids[part_id]
-        if part_id in print_in_hand and part_id in held_by:
-            ctx = contexts[(held_by[part_id], part_id)]
+
+        def side(n):  # the print's direction (world) -> FORWARD / BACKWARD / None
+            horizontal = np.hypot(n[0], n[1])
+            if horizontal < 1e-6 or abs(n[1]) < np.sin(_FACING_SIDEWAYS) * horizontal:
+                return None
+            return "FORWARD" if n[1] < 0 else "BACKWARD"
+
+        arm_ = print_seen_by.get(part_id)
+        if arm_ is not None and contexts[(arm_, part_id)].holding:
+            ctx = contexts[(arm_, part_id)]
             grip = np.empty(9)
             mujoco.mju_quat2Mat(grip, ctx.grip_quat)
-            turn = data.xmat[ctx.body_id].reshape(3, 3) @ grip.reshape(3, 3).T
-            yaw = np.arctan2(turn[1, 0], turn[0, 0]) + ctx.held_yaw
-        elif part_id in print_yaw:
+            h = ctx.held_yaw  # the print is the brick's -y face; at held_yaw 0 it's the grip's -y
+            in_hand = grip.reshape(3, 3).T @ np.array([np.sin(h), -np.cos(h), 0.0])
+            return side(data.xmat[ctx.body_id].reshape(3, 3) @ in_hand)
+        if part_id in print_yaw:
             if lying(data.xmat[b].reshape(3, 3)) != UPRIGHT:
                 print_yaw.pop(part_id)
                 return None
             yaw = print_yaw[part_id] = full_yaw_near(_sim_brick_yaw(data, b, perception.rng, 1), print_yaw[part_id])
         else:
             return None
-        return "FORWARD" if np.cos(yaw) > 0 else "BACKWARD"  # the print is on the brick's -y face
+        return side([np.sin(yaw), -np.cos(yaw), 0.0])  # the print is on the brick's -y face
 
     perception.facing_of = _known_facing
 
@@ -541,7 +557,7 @@ def run_bridge(
                         if kept:
                             perception.status_override[part_id] = "PICKED"
                             if facing is not None:  # held_yaw from B's hand camera at the handover
-                                print_in_hand.add(part_id)
+                                print_seen_by[part_id] = use
                         else:
                             center_xyz = spot  # where it is now (the command's target is from before the flip)
                     if skill == "pick" and kept:
@@ -565,13 +581,18 @@ def run_bridge(
                                     # still upright in the hand? (stand-in, like perception's LYING)
                                     still_upright=lambda d: lying(d.xmat[brick_ids[part_id]].reshape(3, 3)) == UPRIGHT,
                                     idle=perception.maybe_publish, look_held=_flip_look(part_id),
-                                    other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id])
+                                    other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id],
+                                    on_seen=lambda c: print_seen_by.__setitem__(part_id, c.arm))
                             except FacingError as exc:
+                                print_seen_by.pop(part_id, None)
+                                if exc.yaw is not None:  # put back, its print side known
+                                    print_yaw[part_id] = exc.yaw
                                 raise FacingError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}",
                                                   exc.reason) from exc
                             use = ctx.arm
                             facing_yaw[part_id] = FACING_YAW[facing]
-                            print_in_hand.add(part_id)
+                            print_seen_by[part_id] = ctx.arm
+                            print_yaw.pop(part_id, None)
                             node.get_logger().info(f"{use} arm: {PART_LABELS[part_id]} shown to the {SHOW_CAMERA}, "
                                                    f"picked up again ({how}) to face {facing} at the stack")
                         else:
@@ -621,9 +642,9 @@ def run_bridge(
 
                         place_part(ctx, render, clock, center_xyz, verify=_verify, facing_yaw=facing_yaw.get(part_id))
                         held_by.pop(part_id, None)
-                        if part_id in print_in_hand and part_id in facing_yaw:
+                        if part_id in print_seen_by and part_id in facing_yaw:
                             print_yaw[part_id] = facing_yaw[part_id]  # set down at exactly that yaw
-                        print_in_hand.discard(part_id)
+                        print_seen_by.pop(part_id, None)
                         node.get_logger().info(
                             f"{use} arm placed {part_id} (" + (
                                 "not visible from hover, landing unchecked" if ctx.place_error is None
@@ -717,7 +738,7 @@ def run_bridge(
                     perception.status_override[part_id] = "ESCALATED" if part_id in escalated else None
                     if part_id in held_by and not contexts[(held_by[part_id], part_id)].holding:
                         held_by.pop(part_id)  # missed, put back, or let go somewhere wrong
-                        print_in_hand.discard(part_id)
+                        print_seen_by.pop(part_id, None)
                     node.report(command_id, "FAILED", str(exc), getattr(exc, "reason", None))
                     if faulted and fault_bump:
                         _bump_brick(model, data, brick_ids[part_id], _BUMP)
