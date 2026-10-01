@@ -132,6 +132,9 @@ class ZebraPerceptionPublisher(Node):
         # on every message, so a plain LOCATED after a successful place would
         # undo his PLACED and make the tree pick the part up again.
         self.status_override: dict[str, str | None] = {pid: None for pid in self.part_ids}
+        # Field 8 FACING: a function part id -> "FORWARD"/"BACKWARD" or None (UNKNOWN), set
+        # by the skill bridge, which knows a brick's print side once a camera has seen it.
+        self.facing_of = None
         # Per part: monotonic time until which it's reported LOST whatever the
         # cameras see - a test hook for "perception lost track of it" (see
         # `lose_track`).
@@ -222,13 +225,13 @@ class ZebraPerceptionPublisher(Node):
         yaw = np.degrees(table_yaw(R) + self.rng.normal(0.0, _YAW_NOISE))
         yaw = (yaw + 90) % 180 - 90
         # Field 8, FACING (FORWARD / BACKWARD, Victor's 66c34e7): which way the printed face
-        # points. No camera can tell yet - the print is on a side face, the headcam is too
-        # far to read it and the yaw above is only known up to 180 deg - so UNKNOWN, which
-        # his tree treats as fine. The real value comes with print detection.
-        facing = "UNKNOWN"
+        # points. From the table no camera can tell - the print is on a side face, the headcam
+        # is too far to read it and the yaw above is only known up to 180 deg - so UNKNOWN
+        # (his tree treats it as fine) until the bridge has seen the print (`facing_of`).
+        facing = (self.facing_of(pid) if self.facing_of is not None else None) or "UNKNOWN"
         self._publish(
             f"{pid},{status},{x:.4f},{y:.4f},{z:.4f},{lies},{yaw:.1f},{facing}",
-            f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}  {lies} {yaw:+.0f} deg",
+            f"{label}  {status:<8} x={x:+.4f}  y={y:+.4f}  z={z:+.4f}  {lies} {yaw:+.0f} deg {facing}",
         )
 
     def _publish(self, line: str, shown: str) -> None:

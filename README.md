@@ -103,17 +103,21 @@ same seed always lands the same way.
 
 Perception now also says how each brick lies and its angle on the table, in
 three extra fields after z (Victor's tree reads LYING for its flip step and
-FACING for its rotate step):
+shows FACING in its status table):
 
 ```
 part,STATUS,x,y,z,LYING,yaw,FACING
 ```
 
 LYING is `UPRIGHT`, `UPSIDE_DOWN`, `ON_SIDE`, `ON_END` or `TILTED`, yaw the angle in
-degrees (-90..90), and FACING which way the printed face points (`FORWARD` /
-`BACKWARD`, for Victor's rotate step) - always `UNKNOWN` until a camera can
-read the print (his tree treats `UNKNOWN` as fine; it reads FACING from field 8). The bridge log shows it too, e.g. seed 1's body:
-`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg`. A pick
+degrees (-90..90), and FACING which way the printed face points (`FORWARD` =
+towards world -Y / `BACKWARD`). From the table no camera can tell, so a brick
+is `UNKNOWN` until a pick with `desired_facing` has seen its print (shown to the
+headcam, or B's hand camera at a flip handover); from then on it's known while
+held (arm joints + how it sits in the hand) and once placed (`_known_facing` in
+the bridge; checked against the sim's truth: 82 of 82 values right on seeds
+13/17/21). The bridge log shows it too, e.g. seed 1's body:
+`body  LOCATED  x=+0.3986  y=+0.1510  z=-0.1078  ON_SIDE +74 deg UNKNOWN`. A pick
 of a brick that isn't upright is refused before moving (only top-down grips
 exist): his tree sends **`flip`** first (its `EnsureUpright` step).
 

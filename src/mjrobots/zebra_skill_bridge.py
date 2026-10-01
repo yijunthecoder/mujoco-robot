@@ -84,7 +84,8 @@ from .pick_place import _RealtimeClock, _ThrottledSync
 from .scatter import STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_facing import (
-    FACING_YAW, SHOW_CAMERA, FacingError, can_place, held_from_print_in_hand, long_face_view, pick_facing,
+    FACING_YAW, SHOW_CAMERA, FacingError, can_place, full_yaw_near, held_from_print_in_hand, long_face_view,
+    pick_facing,
 )
 from .zebra_flip import PlanningProcess, execute_flip, set_down_kept
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
@@ -279,6 +280,10 @@ def run_bridge(
     bases = arm_bases(model, data)
     held_by: dict[str, str] = {}  # part id -> arm holding it (picked, not yet placed)
     facing_yaw: dict[str, float] = {}  # part id -> yaw to place it at (picked with desired_facing)
+    # Once a camera has seen which side a brick's print is on (the show to the headcam, or
+    # B's hand camera at a flip handover) - for perception's FACING field (_known_facing):
+    print_in_hand: set[str] = set()  # held, and ctx.held_yaw (brick vs grip) is the full one
+    print_yaw: dict[str, float] = {}  # placed: its full yaw on the stack
     clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
 
     fault_picks = 0  # picks of fault_part seen so far
@@ -397,6 +402,33 @@ def run_bridge(
         held_by.pop(part_id, None)
         return False, why, spot
 
+    def _known_facing(part_id: str) -> str | None:
+        """Perception's FACING field: "FORWARD" (print towards world -Y, Victor's
+        convention), "BACKWARD", or None (sent as UNKNOWN) - only for a brick whose
+        print side a camera has seen. From the table nothing can tell (the print is on a
+        side face, 3-10 px in the headcam), so until a pick shows it, it's unknown.
+        Held: the brick's yaw is the hand's turn about vertical (arm joints) plus how
+        it sits in the hand (held_yaw, from the look). Placed: the yaw it was set down at,
+        kept up to date with the yaw look (`_sim_brick_yaw`, only known up to 180 deg -
+        the remembered one decides which way round). Not upright any more: unknown."""
+        b = brick_ids[part_id]
+        if part_id in print_in_hand and part_id in held_by:
+            ctx = contexts[(held_by[part_id], part_id)]
+            grip = np.empty(9)
+            mujoco.mju_quat2Mat(grip, ctx.grip_quat)
+            turn = data.xmat[ctx.body_id].reshape(3, 3) @ grip.reshape(3, 3).T
+            yaw = np.arctan2(turn[1, 0], turn[0, 0]) + ctx.held_yaw
+        elif part_id in print_yaw:
+            if lying(data.xmat[b].reshape(3, 3)) != UPRIGHT:
+                print_yaw.pop(part_id)
+                return None
+            yaw = print_yaw[part_id] = full_yaw_near(_sim_brick_yaw(data, b, perception.rng, 1), print_yaw[part_id])
+        else:
+            return None
+        return "FORWARD" if np.cos(yaw) > 0 else "BACKWARD"  # the print is on the brick's -y face
+
+    perception.facing_of = _known_facing
+
     def _flip_look(part_id: str):
         """execute_flip's `look`: a hand camera looking at the held brick (B's at the
         handover, A's once B holds it) - here the true pose plus ~2 mm / ~2 deg noise,
@@ -508,6 +540,8 @@ def run_bridge(
                             + ("" if kept else " - set it down to pick it up again"))
                         if kept:
                             perception.status_override[part_id] = "PICKED"
+                            if facing is not None:  # held_yaw from B's hand camera at the handover
+                                print_in_hand.add(part_id)
                         else:
                             center_xyz = spot  # where it is now (the command's target is from before the flip)
                     if skill == "pick" and kept:
@@ -537,6 +571,7 @@ def run_bridge(
                                                   exc.reason) from exc
                             use = ctx.arm
                             facing_yaw[part_id] = FACING_YAW[facing]
+                            print_in_hand.add(part_id)
                             node.get_logger().info(f"{use} arm: {PART_LABELS[part_id]} shown to the {SHOW_CAMERA}, "
                                                    f"picked up again ({how}) to face {facing} at the stack")
                         else:
@@ -586,6 +621,9 @@ def run_bridge(
 
                         place_part(ctx, render, clock, center_xyz, verify=_verify, facing_yaw=facing_yaw.get(part_id))
                         held_by.pop(part_id, None)
+                        if part_id in print_in_hand and part_id in facing_yaw:
+                            print_yaw[part_id] = facing_yaw[part_id]  # set down at exactly that yaw
+                        print_in_hand.discard(part_id)
                         node.get_logger().info(
                             f"{use} arm placed {part_id} (" + (
                                 "not visible from hover, landing unchecked" if ctx.place_error is None
@@ -679,6 +717,7 @@ def run_bridge(
                     perception.status_override[part_id] = "ESCALATED" if part_id in escalated else None
                     if part_id in held_by and not contexts[(held_by[part_id], part_id)].holding:
                         held_by.pop(part_id)  # missed, put back, or let go somewhere wrong
+                        print_in_hand.discard(part_id)
                     node.report(command_id, "FAILED", str(exc), getattr(exc, "reason", None))
                     if faulted and fault_bump:
                         _bump_brick(model, data, brick_ids[part_id], _BUMP)
