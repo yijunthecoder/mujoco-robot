@@ -580,8 +580,14 @@ answer takes ~20 s in the bridge.
 side, then the on-side flip): 2 more of 26 upside-down bricks, but a "no
 plan" answer took up to 44-69 s, past the 30 s flip timeout.
 
-**Still open:** a flip that fails halfway opens both hands, so the brick
-drops ~10 cm, next to the stack; upside-down coverage (8/26); B's re-aim out
+**A flip that fails halfway** (e.g. B's re-aimed grip out of reach) used to
+open both hands, dropping the brick 11-15 cm, once 4 cm from the stack. Now a
+hand that still holds it (the fingers stopped at one of the brick's widths)
+first lowers it onto a free spot - the same rules as a set-down - then lets go:
+seeds 9 body and 2 legs ended 14 and 22 cm from the stack, put down, not
+dropped (`_put_down_after_failure`).
+
+**Still open:** upside-down coverage (8/26); B's re-aim out
 of reach; one hand for bricks on their end (untried); which way the print
 faces at the stack (perception only knows the angle up to 180 deg); the
 brick's 3D pose comes from the simulation (a stand-in for a detector).

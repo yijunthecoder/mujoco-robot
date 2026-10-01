@@ -527,8 +527,10 @@ def run_bridge(
                                 raise RuntimeError(f"{label} is {lies} - no way found to flip it (arms not moved)")
                             node.get_logger().info(f"flip plan ({data.time - t0:.1f} s): {plan.describe()}")
                             try:
+                                # where the other bricks are (sim positions, like the planner's)
+                                others_xy = [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id]
                                 execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render, clock,
-                                             _flip_look(part_id))
+                                             _flip_look(part_id), others_xy)
                             except Exception:
                                 _let_go_and_park(part_id)
                                 raise

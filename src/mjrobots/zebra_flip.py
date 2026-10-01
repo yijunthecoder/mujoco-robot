@@ -192,6 +192,31 @@ class SoloPlan:
                 f"at ({self.set_down[0]:.2f}, {self.set_down[1]:+.2f})")
 
 
+def free_spots(zone: Zone, center_xy, other_xy, far=False) -> list[np.ndarray]:
+    """Table spots (xy) to set a brick down on: where it lay and spots 6 and 10 cm from
+    it; or with `far`, the rest of the green zone (nearest first, one every
+    _FAR_SPOT_SPACING). Always inside the zone, so an arm can pick it up again and stack
+    it, and clear of the other bricks and the stack. The far spots gave one hand alone 3
+    more bricks of 6 tried (seeds 3 head, 7 and 8 legs), but searching them all takes
+    ~20 s when none works - so the planner tries them last (see `_Planner.plan`)."""
+    center_xy = np.asarray(center_xy)[:2]
+
+    def free(xy):
+        return (zone.covers(xy) and np.linalg.norm(xy - STACK_XY) >= STACK_CLEAR
+                and all(np.linalg.norm(xy - o) >= MIN_BRICK_GAP for o in other_xy))
+
+    near = [xy for xy in [center_xy] + [center_xy + r * np.array([np.cos(a), np.sin(a)])
+                                        for r in (0.06, 0.10) for a in np.radians(np.arange(0, 360, 45))]
+            if free(xy)]
+    if not far:
+        return near
+    spots = []
+    for xy in sorted(zone.cells, key=lambda xy: np.linalg.norm(xy - center_xy)):
+        if free(xy) and all(np.linalg.norm(xy - s) >= _FAR_SPOT_SPACING for s in near + spots):
+            spots.append(xy)
+    return spots
+
+
 class _Geoms:
     """Collision geoms by arm part, for the handover distance checks."""
 
@@ -305,26 +330,9 @@ class _Planner:
         return True
 
     def set_down_spots(self, center, far=False):
-        """Where the brick may be set down upright: where it lay and spots 6 and 10 cm
-        from it; or with `far`, the rest of the green zone (nearest first, one every
-        _FAR_SPOT_SPACING). Always inside the zone, so an arm can pick it up again and
-        stack it, and clear of the other bricks and the stack. The far spots gave one
-        hand alone 3 more bricks of 6 tried (seeds 3 head, 7 and 8 legs), but searching
-        them all takes ~20 s when none works - so they're tried last (see `plan`)."""
-        def free(xy):
-            return (self.zone.covers(xy) and np.linalg.norm(xy - STACK_XY) >= STACK_CLEAR
-                    and all(np.linalg.norm(xy - o) >= MIN_BRICK_GAP for o in self.other_xy))
-
-        near = [xy for xy in [center[:2]] + [center[:2] + r * np.array([np.cos(a), np.sin(a)])
-                                             for r in (0.06, 0.10) for a in np.radians(np.arange(0, 360, 45))]
-                if free(xy)]
-        spots = near
-        if far:
-            spots = []
-            for xy in sorted(self.zone.cells, key=lambda xy: np.linalg.norm(xy - center[:2])):
-                if free(xy) and all(np.linalg.norm(xy - s) >= _FAR_SPOT_SPACING for s in near + spots):
-                    spots.append(xy)
-        return [np.array([x, y, TABLE_TOP + BRICK_HEIGHT / 2]) for x, y in spots]
+        """Where the brick may be set down upright (`free_spots`), at its upright centre height."""
+        return [np.array([x, y, TABLE_TOP + BRICK_HEIGHT / 2])
+                for x, y in free_spots(self.zone, center[:2], self.other_xy, far)]
 
     # --- A's pick, shared by the strategies ---
     def pick(self, d, cA, Rb0, center, a_axis):
@@ -724,12 +732,63 @@ def _execute_solo(plan: SoloPlan, A: ZebraArmContext, render, clock, look) -> No
     go_home(A, render, clock)
 
 
-def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look) -> None:
+def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy) -> str:
+    """After a flip failed halfway: if a hand still holds the brick, lower it onto a free
+    table spot (free_spots: in the green zone, clear of the stack and the other bricks)
+    and only then let go. Opening in mid-air dropped it ~10 cm, often right next to the
+    stack (the handover spots are beside it). With both hands on it (mid-handover) A lets
+    go first. Returns what was done, for the failure message."""
+    A = contexts[plan.a_side]
+    B = contexts[plan.b_side] if isinstance(plan, FlipPlan) else None
+    model, data = A.model, A.data
+    size = model.geom_size[next(g for g in range(model.ngeom)
+                                if model.geom_bodyid[g] == A.brick_id and model.geom_contype[g])]
+
+    def holding(c):  # the fingers stopped at one of the brick's widths (read from the gripper)
+        return c is not None and min(abs(c.grip_width() - 2 * s) for s in size) <= _WIDTH_TOL
+
+    holders = [c for c in (B, A) if holding(c)]
+    if not holders:
+        return "no hand was holding the brick"
+    if len(holders) == 2:  # mid-handover: B keeps it
+        _hold(model, data, render, clock, A.this_arm, _GRIP_OPEN, 150)
+        A.holding = False
+    c = holders[0]
+    c.holding = True
+    quat = data.xquat[c.body_id].copy()  # keep the hand as it is: the brick stays the way it lies
+    R_seen, center_seen = look(data)
+    height = float(np.abs(R_seen[2]) @ size)  # centre height above the table, lying as it is
+    zone = Zone.load("either")
+    for xy in free_spots(zone, plan.center, other_xy) + free_spots(zone, plan.center, other_xy, far=True):
+        try:
+            _set_down_seen(c, render, clock, np.array([xy[0], xy[1], TABLE_TOP + height]), quat, look)
+            return f"the {c.arm} arm set the brick down on the table at ({xy[0]:.2f}, {xy[1]:+.2f})"
+        except IKError:
+            continue
+    _hold(model, data, render, clock, c.this_arm, _GRIP_OPEN, 150)
+    c.holding = False
+    return f"no free spot was reachable - the {c.arm} arm let go where it was"
+
+
+def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look, other_xy=()) -> None:
     """Do `plan` for real (contexts: {arm: ZebraArmContext} on the live data).
     `look(data)` returns the held brick's (rotation, centre) as a camera sees it - at the
     handover (B re-aims its grip) and before the set-down (aimed by where the brick really
-    sits in the fingers).
-    Raises RuntimeError / IKError if a step fails (fingers miss, a move is refused)."""
+    sits in the fingers). `other_xy`: where the other bricks are (kept clear if a failed
+    flip has to put the brick down somewhere).
+    Raises RuntimeError if a step fails (fingers miss, a move is refused) - after putting
+    a still-held brick down on the table (`_put_down_after_failure`)."""
+    try:
+        _execute_flip(plan, contexts, render, clock, look)
+    except Exception as exc:
+        try:
+            what = _put_down_after_failure(plan, contexts, render, clock, look, other_xy)
+        except Exception as again:
+            what = f"putting it down failed too: {again}"
+        raise RuntimeError(f"{exc} ({what})") from exc
+
+
+def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look) -> None:
     if isinstance(plan, SoloPlan):
         _execute_solo(plan, contexts[plan.a_side], render, clock, look)
         return
