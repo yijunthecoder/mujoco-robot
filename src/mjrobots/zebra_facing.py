@@ -37,7 +37,14 @@ from .zebra_pick_place import ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ
 
 
 class FacingError(RuntimeError):
-    """The brick can't be placed facing the wanted way (it has been put back)."""
+    """The brick can't be placed facing the wanted way (it has been put back).
+    `reason`, for zebra_bt's FAILED reply: "FACING_IMPOSSIBLE" (no grip of either arm
+    can do it - retrying won't help, his tree escalates), "NEEDS_FLIP" (it turned over
+    in the fingers), or None (worth a normal retry)."""
+
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
 
 # The brick's full yaw at the stack for each facing (print = the brick's -y face:
 # at yaw 0 it points to world -Y).
@@ -265,7 +272,8 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         # held up to the camera it can swing round between the fingertips (once all the way
         # over, in testing): put it back as it is - the tree re-locates it, and flips it if needed
         _put_down(c)
-        raise FacingError("it turned in the fingers while being shown - put it back (it may need flipping)")
+        raise FacingError("it turned in the fingers while being shown - put it back (it may need flipping)",
+                          "NEEDS_FLIP")
     yaw = _wrap(c.grip_yaw + held) if held is not None else None  # the brick's full yaw where it lay
     # Always put it back and pick it up again: tilted towards the camera it shifts in the
     # fingers (up to 1.3 cm and 18 deg in testing) and was then placed off target or fell
@@ -298,7 +306,8 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
                 continue  # just out of reach once it looked again from hover (refused before moving)
             holder.held_yaw = want_held
             return holder, how
-    raise FacingError("neither grip of either arm can set it down facing that way at the stack - put it back")
+    raise FacingError("neither grip of either arm can set it down facing that way at the stack - put it back",
+                      "FACING_IMPOSSIBLE")
 
 
 def full_yaw_near(yaw_mod180: float, remembered: float) -> float:

@@ -10,7 +10,12 @@ Victor's `SkillBridge` (build_a_zebra/src/main.cpp, checked out locally at
 and blocks that part's `PickPart`/`PlacePart` BT node in RUNNING until a
 matching reply arrives on `/zebra/skill_status`:
 
-    {"command_id", "status": "SUCCEEDED"|"FAILED"[, "message"]}
+    {"command_id", "status": "SUCCEEDED"|"FAILED"[, "message"][, "reason"]}
+
+`reason` (only on some FAILED replies) is a fixed code his tree acts on, so it
+doesn't have to match words in `message`: "FACING_IMPOSSIBLE" = no grip of
+either arm can place it facing as asked (he escalates at once), "NEEDS_FLIP" =
+it turned over in the fingers (his retry re-checks upright and flips it).
 
 This node is that reply: for all three zebra parts (legs/body/head, ids
 31111p0e/f/g - see bom.json) and both arms, it keeps a MuJoCo viewer running,
@@ -152,10 +157,12 @@ class ZebraSkillBridge(Node):
 
         self.pending.put(command)
 
-    def report(self, command_id: str, status: str, message: str = "") -> None:
+    def report(self, command_id: str, status: str, message: str = "", reason: str | None = None) -> None:
         payload = {"command_id": command_id, "status": status}
         if message:
             payload["message"] = message
+        if reason:
+            payload["reason"] = reason
         msg = String()
         msg.data = json.dumps(payload)
         self._status_pub.publish(msg)
@@ -526,7 +533,8 @@ def run_bridge(
                                     idle=perception.maybe_publish, look_held=_flip_look(part_id),
                                     other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id])
                             except FacingError as exc:
-                                raise RuntimeError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}") from exc
+                                raise FacingError(f"can't place {PART_LABELS[part_id]} facing {facing}: {exc}",
+                                                  exc.reason) from exc
                             use = ctx.arm
                             facing_yaw[part_id] = FACING_YAW[facing]
                             node.get_logger().info(f"{use} arm: {PART_LABELS[part_id]} shown to the {SHOW_CAMERA}, "
@@ -671,7 +679,7 @@ def run_bridge(
                     perception.status_override[part_id] = "ESCALATED" if part_id in escalated else None
                     if part_id in held_by and not contexts[(held_by[part_id], part_id)].holding:
                         held_by.pop(part_id)  # missed, put back, or let go somewhere wrong
-                    node.report(command_id, "FAILED", str(exc))
+                    node.report(command_id, "FAILED", str(exc), getattr(exc, "reason", None))
                     if faulted and fault_bump:
                         _bump_brick(model, data, brick_ids[part_id], _BUMP)
                         perception.lose_track(part_id, _BUMP_LOST_S)

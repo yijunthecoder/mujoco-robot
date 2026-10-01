@@ -178,7 +178,11 @@ points to world -Y, the robot's right / the right of the headcam image;
    the camera it shifts in the fingers, up to 1.3 cm / 18 deg; placed from that
    grip, bricks landed off target or fell off the stack);
 4. place it at exactly that yaw. If no grip of either arm can reach that yaw at
-   the stack, the pick fails (`FAILED`, brick put back).
+   the stack, the pick fails (`FAILED`, brick put back) with
+   `"reason": "FACING_IMPOSSIBLE"`, so Victor's tree escalates at once instead
+   of retrying. A brick that turned over in the fingers while shown gets
+   `"reason": "NEEDS_FLIP"` (his retry re-checks upright and flips it); one
+   whose print couldn't be seen gets no reason (a normal retry).
 
 Headless, upright scatters (seeds 4-30): 37 bricks placed, **every one facing
 FORWARD**, placed 0.9 cm off on average (max 1.8); 21 failed as "can't face
