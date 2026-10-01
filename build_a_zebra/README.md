@@ -199,6 +199,11 @@ All positions are in the MuJoCo world frame, in metres, referring to the brick's
 
 All three topics use `std_msgs/String`. Payloads are JSON or CSV — no custom `.msg` types.
 
+### Conventions
+
+- **FORWARD** = world **−Y** direction (the robot's right side, right of the headcam image). This is the desired facing of the zebra print on the stack.
+- The `pick` skill command can carry an optional `desired_facing` field (`"FORWARD"` | `""`). The executor picks the grip that produces that facing.
+
 ### `/zebra/skill_commands` — Brain → Hands
 
 One message per pick/place request.
@@ -208,7 +213,8 @@ One message per pick/place request.
   "command_id": "zebra-1",
   "skill": "pick",
   "part_id": "31111p0e",
-  "target": { "x": 0.15, "y": -0.19, "z": -0.86 }
+  "target": { "x": 0.15, "y": -0.19, "z": -0.86 },
+  "desired_facing": "FORWARD"
 }
 ```
 
@@ -218,6 +224,7 @@ One message per pick/place request.
 | `skill` | `"pick"` or `"place"` |
 | `part_id` | `31111p0e` (legs), `31111p0f` (body), or `31111p0g` (head) |
 | `target` | World-frame brick-origin position in metres |
+| `desired_facing` | Optional. `"FORWARD"` (= world −Y) or `""`. Only meaningful for `pick`; the executor chooses the grip that achieves this facing. |
 
 ### `/zebra/skill_status` — Hands → Brain
 

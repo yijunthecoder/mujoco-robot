@@ -41,13 +41,6 @@
           </RecoveryPolicy>
         </Fallback>
 
-        <Fallback name="EnsureFacing">
-          <IsPartFacingForward part="{part}"/>
-          <RecoveryPolicy part="{part}">
-            <RotatePart part="{part}"/>
-          </RecoveryPolicy>
-        </Fallback>
-
         <RecoveryPolicy part="{part}">
           <PickPart part="{part}"/>
         </RecoveryPolicy>
@@ -70,9 +63,6 @@
     <Condition ID="IsPartUpright">
       <input_port name="part"/>
     </Condition>
-    <Condition ID="IsPartFacingForward">
-      <input_port name="part"/>
-    </Condition>
     <Action ID="MarkEscalated">
       <input_port name="part"/>
     </Action>
@@ -86,9 +76,6 @@
       <input_port name="part"/>
     </Action>
     <Action ID="FlipPart">
-      <input_port name="part"/>
-    </Action>
-    <Action ID="RotatePart">
       <input_port name="part"/>
     </Action>
     <Decorator ID="RecoveryPolicy">

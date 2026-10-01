@@ -112,7 +112,8 @@ namespace zebra_bt
     std::string send(
       const std::string & skill,
       const std::string & part,
-      const geometry_msgs::msg::Point & target)
+      const geometry_msgs::msg::Point & target,
+      const std::string & desired_facing = "")
     {
       const std::string command_id =
         "zebra-" + std::to_string(++next_command_id_);
@@ -127,6 +128,11 @@ namespace zebra_bt
           {"z", target.z}
         }}
       };
+
+      // Only include desired_facing when it's non-empty
+      if (!desired_facing.empty()) {
+        payload["desired_facing"] = desired_facing;
+      }
 
       std_msgs::msg::String message;
       message.data = payload.dump();    //? Json -> String
@@ -148,6 +154,14 @@ namespace zebra_bt
       //? zebra_bt_node | Done / Failed <--- READ
     }
 
+      std::string message(const std::string & command_id)
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = messages_.find(command_id);
+        return (it == messages_.end()) ? "" : it->second;
+      }
+
+
     private:
       void statusCallback(const std_msgs::msg::String::SharedPtr message) //* Write to the map (statuses_)
       {
@@ -162,8 +176,15 @@ namespace zebra_bt
           //? zebra_bt_node_1 | Done
           //? zebra_bt_node_2 | Failed <--- NEW
 
+          //? Read optional "message" field (used for permanent failures)
+          std::string reason;
+          if (payload.contains("message")) {
+            reason = payload.at("message").get<std::string>();
+          }
+
           std::lock_guard<std::mutex> lock(mutex_);
           statuses_[command_id] = execution_status;
+          messages_[command_id] = reason;
         } catch (const std::exception &) {
           // Ignore malformed status messages.
           // catch [Safety Net], try [do stuff might fail]
@@ -178,6 +199,7 @@ namespace zebra_bt
     //? State (protects + stores + counts)
     std::mutex mutex_;
     std::unordered_map<std::string, std::string> statuses_;
+    std::unordered_map<std::string, std::string> messages_;
     unsigned long next_command_id_{0};
   };
 
@@ -492,7 +514,7 @@ public:
     }
 
     attempt_ = wm_->incrementPickAttempts(part_);
-    command_id_ = bridge_->send("pick", part_, state.position);
+    command_id_ = bridge_->send("pick", part_, state.position, "FORWARD");
 
     RCLCPP_INFO(
       logger_,
@@ -509,31 +531,33 @@ public:
   BT::NodeStatus onRunning() override
   {
     const std::string result = bridge_->status(command_id_);
-
-    if (result == "SUCCEEDED") {
-      wm_->setPartStatus(part_, PartStatus::PICKED);
-      wm_->resetPickAttempts(part_);
-      RCLCPP_INFO(
-        logger_,
-        "[PICK]    %s: SUCCESS (attempt %d)",
-        prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::SUCCESS;
-    }
-
     if (result == "FAILED") {
+      const std::string reason = bridge_->message(command_id_);
+
+      // Permanent failure: executor says retrying won't help (e.g. can't face FORWARD).
+      // Escalate straight away instead of burning retries.
+      if (reason.find("facing") != std::string::npos) {
+        wm_->setPartStatus(part_, PartStatus::ESCALATED);
+        RCLCPP_ERROR(
+          logger_,
+          "[PICK]    %s: PERMANENT FAILURE -- %s",
+          prettyPart(part_, roles_).c_str(), reason.c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+
       wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
       RCLCPP_WARN(
         logger_,
-        "[PICK]    %s: FAILED (attempt %d) -- executor reported failure",
-        prettyPart(part_, roles_).c_str(), attempt_);
+        "[PICK]    %s: FAILED (attempt %d) -- %s",
+        prettyPart(part_, roles_).c_str(), attempt_, reason.c_str());
       return BT::NodeStatus::FAILURE;
     }
 
-    if (++wait_ticks_ > 60) {
+    if (++wait_ticks_ > 180) {
       wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
       RCLCPP_WARN(
         logger_,
-        "[PICK]    %s: TIMEOUT after 30s -- no reply from executor",
+        "[PICK]    %s: TIMEOUT after 90s -- no reply from executor",
         prettyPart(part_, roles_).c_str());
       return BT::NodeStatus::FAILURE;
     }
@@ -543,15 +567,15 @@ public:
 
   void onHalted() override {}
 
-private:
-  WorldModelPtr wm_;
-  SkillBridgePtr bridge_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-  std::string part_;
-  std::string command_id_;
-  int attempt_{0};
-  int wait_ticks_{0};
+  private:
+    WorldModelPtr wm_;
+    SkillBridgePtr bridge_;
+    RolesMapPtr roles_;
+    rclcpp::Logger logger_;
+    std::string part_;
+    std::string command_id_;
+    int attempt_{0};
+    int wait_ticks_{0};
 };
 
 class PlacePart : public BT::StatefulActionNode
