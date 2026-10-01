@@ -144,6 +144,19 @@ $ bash scripts/run_zebra.sh --scatter 12     # legs one hand, body two hands; he
 $ bash scripts/run_zebra.sh --scatter 129    # all three land upright, nothing to flip
 ```
 
+**No set-down after a two-hand flip of a brick on its side** (45 + 45 deg):
+B ends holding it the normal way (top-down, by its long faces), so it keeps
+it; perception reports it `PICKED`, the tree's next `pick` is answered at
+once and B places it - ~25 s saved. Every other flip ends holding the ends
+(or sideways) and still sets the brick down for a fresh pick. With a
+`desired_facing`, which side the print is on comes from B's hand camera at
+the handover (~8 cm away); if it didn't see it, or B's grip can't set it down
+facing that way, B sets it down and it's picked as above. Tested: kept bricks
+placed 1.0-1.4 cm off; known issue: seed 3445's legs with a facing (print not
+seen at the handover) misses the re-pick in the bridge every time, though a
+headless replay of the same steps works - reported `FAILED`, so the tree
+re-locates it.
+
 A flip takes 25-60 s live, longer than his tree's 30 s flip timeout: the
 tree then marks the attempt `FAILED` and sends `flip` again, which finds the
 brick upright and succeeds at once - it works, but logs a false failure
