@@ -531,6 +531,17 @@ public:
   BT::NodeStatus onRunning() override
   {
     const std::string result = bridge_->status(command_id_);
+    
+    if (result == "SUCCEEDED") {
+      wm_->setPartStatus(part_, PartStatus::PICKED);
+      wm_->resetPickAttempts(part_);
+      RCLCPP_INFO(
+        logger_,
+        "[PICK]    %s: SUCCESS (attempt %d)",
+        prettyPart(part_, roles_).c_str(), attempt_);
+      return BT::NodeStatus::SUCCESS;
+    }
+
     if (result == "FAILED") {
       const std::string reason = bridge_->message(command_id_);
 
