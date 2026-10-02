@@ -32,7 +32,8 @@ from . import cartesian_control, sim_step
 from . import zebra_pick_place as zpp
 from .camera_calibration import IMAGE_SIZE
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, solve_ik_pose
-from .zebra_flip import _MIN_TABLE_GAP, _plan_only, set_down_kept
+from .scatter import STACK_XY, Zone
+from .zebra_flip import _MIN_TABLE_GAP, _plan_only, free_spots, set_down_kept
 from .zebra_pick_place import (
     BRICK_HEIGHT, ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _wrap, go_home, grasp_part, put_back,
 )
@@ -74,6 +75,13 @@ _REGRIP_TURNS = np.radians([30, -30, 60, -60, 90, -90, 120, -120, 150, -150])
 # after the put-back.
 _REGRIP_YAW_MARGIN = np.radians(5.0)
 _REGRIP_SPOT_MARGIN = 0.01  # m
+# Still no grip after turning it where it lay? Hand it over via the table: set it down on
+# one of the first this-many free spots nearest the stack (where both arms reach well),
+# turned if that helps, for an arm - usually the other one: the arms are mirror images,
+# so a brick one would place backwards the other places forwards - to pick it up. Plan-only
+# over 81 bricks (seeds 4-30): this rescued all 4 that the turn alone couldn't, each search
+# 2-5 s (zebra_scratch/relay_check.py).
+_RELAY_SPOTS = 12
 _SHOW_LEANS = np.radians([0, 20, 40])  # face turned this far from looking straight at the camera
 _COLLISION_GROUPS = np.array([1, 1, 0, 0, 0, 0], dtype=np.uint8)  # visual meshes are group 2
 
@@ -250,10 +258,17 @@ def can_place(ctx: ZebraArmContext, place_xyz, facing_yaw: float) -> bool:
 
 
 def _can_pick_and_place(ctx: ZebraArmContext, center_xyz, grip: float, yaw_full: float, place_xyz,
-                        facing_yaw: float) -> bool:
+                        facing_yaw: float, park: ZebraArmContext | None = None) -> bool:
     """Plan-only: could this (empty-handed) arm pick the brick with grip yaw `grip` and then
-    place it at `facing_yaw`? Nothing moves."""
+    place it at `facing_yaw`? Nothing moves. `park`: the arm holding it now - if that's the
+    other arm, it's planned as parked at home (pick_facing sends it home first; planned
+    where it stood, above the brick, it blocked the other arm's every way in - seed 12's
+    legs)."""
     d = copy.copy(ctx.data)
+    if park is not None and park.arm != ctx.arm:
+        adr = ctx.model.jnt_qposadr[park.joint_ids]
+        d.qpos[adr] = ctx.model.key("home").qpos[adr]
+        mujoco.mj_forward(ctx.model, d)
     c = ZebraArmContext(ctx.model, d, ctx.arm, mujoco.mj_id2name(ctx.model, mujoco.mjtObj.mjOBJ_BODY, ctx.brick_id))
     hover = np.asarray(center_xyz, float) + [0, 0, _HOVER_DZ]
     with _plan_only():
@@ -299,25 +314,38 @@ def _can_set_down_turned(ctx: ZebraArmContext, spot, turn: float) -> bool:
             return False
 
 
-def _regrip_turn(c: ZebraArmContext, options, spot, yaw: float, place_xyz, facing_yaw: float) -> float:
-    """How far to turn the brick while putting it back on `spot` (it lies at full yaw
-    `yaw`) so that one of `options` can then pick it and place it facing `facing_yaw`:
-    0 if one can already, else the first of _REGRIP_TURNS the holding arm `c` can set it
-    down with and after which one can - or 0 if none helps (the caller then finds no option)."""
+def _regrip_plan(c: ZebraArmContext, options, spot, yaw: float, place_xyz, facing_yaw: float,
+                 other_xy=(), idle=None) -> tuple[np.ndarray, float]:
+    """Where to put the brick back (its centre) and how far to turn it on the way down
+    (it lies at full yaw `yaw` on `spot`, held by `c`) so that one of `options` can then
+    pick it and place it facing `facing_yaw`: (spot, 0) if one can already; else the
+    first of _REGRIP_TURNS on `spot`; else the first free spot near the stack (and turn)
+    - a handover via the table, usually to the other arm. Turned or moved, the option must
+    still work if it lands the margins off. (spot, 0) if nothing helps (the caller then
+    finds no option). `idle()`, if given, is called between the checks (see _show_pose)."""
     def works(h, want, y, at):
-        return _can_pick_and_place(h, at, _wrap(y - want), y, place_xyz, facing_yaw)
+        if idle is not None:
+            idle()
+        return _can_pick_and_place(h, at, _wrap(y - want), y, place_xyz, facing_yaw, park=c)
 
-    def works_if_off(h, want, y):  # also if it lands up to the margins off (nominal first)
+    def works_if_off(y, at):  # some option, also if it lands up to the margins off (nominal first)
         m, d = _REGRIP_YAW_MARGIN, _REGRIP_SPOT_MARGIN
-        return all(works(h, want, _wrap(y + dy), np.asarray(spot, float) + dp)
-                   for dy in (0.0, -m, m) for dp in ([0, 0, 0], [d, 0, 0], [-d, 0, 0], [0, d, 0], [0, -d, 0]))
+        return any(all(works(h, want, _wrap(y + dy), np.asarray(at, float) + dp)
+                       for dy in (0.0, -m, m) for dp in ([0, 0, 0], [d, 0, 0], [-d, 0, 0], [0, d, 0], [0, -d, 0]))
+                   for h, want, _ in options)
 
+    spot = np.asarray(spot, float)
     if any(works(h, want, yaw, spot) for h, want, _ in options):
-        return 0.0
+        return spot, 0.0
     for turn in _REGRIP_TURNS:
-        if _can_set_down_turned(c, spot, turn) and any(works_if_off(h, want, _wrap(yaw + turn)) for h, want, _ in options):
-            return float(turn)
-    return 0.0
+        if _can_set_down_turned(c, spot, turn) and works_if_off(_wrap(yaw + turn), spot):
+            return spot, float(turn)
+    for xy in free_spots(Zone.load("either"), STACK_XY, other_xy, far=True)[:_RELAY_SPOTS]:
+        there = np.array([xy[0], xy[1], spot[2]])
+        for turn in (0.0, *_REGRIP_TURNS):
+            if _can_set_down_turned(c, there, turn) and works_if_off(_wrap(yaw + turn), there):
+                return there, float(turn)
+    return spot, 0.0
 
 
 def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, facing_yaw: float,
@@ -354,10 +382,15 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         raise FacingError("it turned in the fingers while being shown - put it back (it may need flipping)",
                           "NEEDS_FLIP")
     yaw = _wrap(c.grip_yaw + held) if held is not None else None  # the brick's full yaw where it lay
-    turn = 0.0
+    turn, moved = 0.0, None
     if held is not None:
-        # no grip works from where it lies? put it back turned so that one does
-        turn = _regrip_turn(c, _facing_options(contexts, arm, held), c.picked_from, yaw, place_xyz, facing_yaw)
+        # no grip works from where it lies? put it back turned, or on a spot near the stack
+        # (a handover via the table), so that one does
+        spot, turn = _regrip_plan(c, _facing_options(contexts, arm, held), c.picked_from, yaw, place_xyz,
+                                  facing_yaw, other_xy, idle)
+        if np.linalg.norm(spot[:2] - np.asarray(c.picked_from)[:2]) > 1e-6:
+            moved = spot
+        c.picked_from = spot  # set_down_kept puts it there first
         c.grip_yaw = _wrap(c.grip_yaw + turn)  # the brick turns with the wrist as it's set down
         yaw = _wrap(yaw + turn)
     # Always put it back and pick it up again: tilted towards the camera it shifts in the
@@ -373,7 +406,8 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         on_seen(None, yaw_now)  # back on the table, its print side known
     # the options: which arm, and which way round it should hold the brick (held_yaw 0 or pi)
     for holder, want_held, how in _facing_options(contexts, arm, held):
-        if _can_pick_and_place(holder, centre_now, _wrap(yaw_now - want_held), yaw_now, place_xyz, facing_yaw):
+        if _can_pick_and_place(holder, centre_now, _wrap(yaw_now - want_held), yaw_now, place_xyz, facing_yaw,
+                               park=c):
             if holder is not c:
                 go_home(c, render, clock)
 
@@ -388,7 +422,9 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
             except IKError:
                 continue  # just out of reach once it looked again from hover (refused before moving)
             holder.held_yaw = want_held
-            return holder, how + (f", put down turned {np.degrees(turn):+.0f} deg first" if turn else "")
+            return holder, how + (f", handed over via the table at ({moved[0]:.2f}, {moved[1]:+.2f})"
+                                   if moved is not None else "") + (
+                f", put down turned {np.degrees(turn):+.0f} deg first" if turn else "")
     raise FacingError("neither grip of either arm can set it down facing that way at the stack - put it back",
                       "FACING_IMPOSSIBLE")
 
