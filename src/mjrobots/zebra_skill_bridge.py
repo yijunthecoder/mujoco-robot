@@ -576,6 +576,15 @@ def run_bridge(
                                 print_seen_by[part_id] = use
                         else:
                             center_xyz = spot  # where it is now (the command's target is from before the flip)
+                            if len(arms) > 1 and not requested:
+                                # pick it up with the arm for where it is now, not the one that held
+                                # it: set down on the other side, the holder couldn't reach it again
+                                # (seeds 6, 12: "IK could not reach", the retry by position worked)
+                                use = choose_arm(center_xyz[:2], zones, bases)
+                                ctx = contexts[(use, part_id)]
+                                for other in arms:
+                                    if other != use:
+                                        go_home(contexts[(other, part_id)], render, clock)
                     if skill == "pick" and kept:
                         pass  # already in the hand from the flip: nothing to move
                     elif skill == "pick":

@@ -79,6 +79,11 @@ _YAW_TURNS = np.radians([0, 30, -30, 60, -60, 90, -90, 180])  # extra turn about
 # (zebra_scratch/relocate_check.py); the plain pick as it lies almost always works there.
 _MOVE_TURNS = np.radians([0, 90, -90])
 _MOVE_SPOTS = 4
+# A flipped brick is set down on one of these many free spots nearest the middle of the area
+# both arms reach first, then near where it lay: set down where it lay (e.g. seed 3's legs at
+# (0.44, +0.41), a far corner) the next pick could often not turn it to face FORWARD - no
+# grip of either arm reaches the needed angle out there (seeds 3, 5, 9, 20 in the sweep).
+_MIDDLE_SET_DOWN = 5
 # How much higher than A's grip B may grip. Only the middle: 0.75 and 1.25 cm used to be
 # allowed (they keep the four fingers apart), but a brick held by its top strip slid
 # out of B's fingers on the way down - 5 of 6 bricks in physics tests, and seed 1's
@@ -365,10 +370,19 @@ class _Planner:
         mujoco.mj_forward(self.model, d)
         return True
 
-    def set_down_spots(self, center, far=False):
-        """Where the brick may be set down upright (`free_spots`), at its upright centre height."""
-        return [np.array([x, y, TABLE_TOP + BRICK_HEIGHT / 2])
-                for x, y in free_spots(self.zone, center[:2], self.other_xy, far)]
+    def set_down_spots(self, center, where="any"):
+        """Where the brick may be set down upright, at its upright centre height: "middle" =
+        the free spots nearest the middle of the area both arms reach (_MIDDLE_SET_DOWN),
+        "near" = `free_spots` around where it lay, "any" = middle then near, "far" = the
+        rest of the zone."""
+        xys = []
+        if where in ("middle", "any"):
+            xys += free_spots(self.zone, _both_arms_middle(), self.other_xy)[:_MIDDLE_SET_DOWN]
+        if where in ("near", "any"):
+            xys += free_spots(self.zone, center[:2], self.other_xy)
+        if where == "far":
+            xys += free_spots(self.zone, center[:2], self.other_xy, far=True)
+        return [np.array([x, y, TABLE_TOP + BRICK_HEIGHT / 2]) for x, y in xys]
 
     # --- A's pick, shared by the strategies ---
     def pick(self, d, cA, Rb0, center, a_axis):
@@ -398,11 +412,11 @@ class _Planner:
         return grip_a, Rgrasp, q_grasp, rel, d.qpos[self.model.jnt_qposadr[cA.joint_ids]].copy()
 
     # --- one hand alone (on its side or on its end: a 90 deg turn) ---
-    def attempt_solo(self, lies, Rb0, center, a_side, far=False):
+    def attempt_solo(self, lies, Rb0, center, a_side, where="middle"):
         """A picks it by the pair of faces across the turn's axis (_CASES: on its side the
         two ends, on its end the two long faces), rolls its hand the whole 90 deg about
         that axis (the brick is then upright in its fingers), lowers it onto a set-down
-        spot (`far`: see set_down_spots) and lets go."""
+        spot (`where`: see set_down_spots) and lets go."""
         cfg = _CASES[lies]
         wA = cfg["wA"]
         other = "left" if a_side == "right" else "right"
@@ -425,7 +439,7 @@ class _Planner:
                     hold = RA @ off_hand
                     # the brick centre's height above the table once set down (from its box size)
                     height = float(np.abs((RA @ rel[1])[2]) @ self.model.geom_size[self.brick_geoms[0]])
-                    for spot in self.set_down_spots(center, far):
+                    for spot in self.set_down_spots(center, where):
                         spot = np.array([spot[0], spot[1], TABLE_TOP + height])
                         d.qpos[:], d.ctrl[:] = after_lift
                         mujoco.mj_forward(self.model, d)
@@ -634,11 +648,15 @@ class _Planner:
         "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout.
         `allow_move`: also try moving it first (MovePlan), before the far one-hand spots."""
         cfg = _CASES[lies]
-        solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies in _ONE_HAND else []
+        one = lies in _ONE_HAND
+        solo = [lambda side: self.attempt_solo(lies, Rb0, center, side, "middle")] if one else []
         two = [lambda side, r=r: self.attempt(lies, Rb0, center, side, r) for r in cfg["rolls"]]
-        slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies in _ONE_HAND else []
         move = [lambda side: self.attempt_move(lies, Rb0, center, side)] if allow_move else []
-        for strategies in (solo, two, move, slow):
+        # set down near where it lay only after those: out at the edge the next pick often
+        # couldn't face it FORWARD (seeds 3, 5: one hand set the legs down in a far corner)
+        solo_near = [lambda side: self.attempt_solo(lies, Rb0, center, side, "near")] if one else []
+        slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, "far")] if one else []
+        for strategies in (solo, two, move, solo_near, slow):
             for a_side in self.arms_order:
                 for strategy in strategies:
                     p = strategy(a_side)
