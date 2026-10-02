@@ -842,6 +842,12 @@ public:
     resetChild();
 
     const auto state = wm_->getPartState(part);
+
+    // Child already gave up for good — don't retry
+    if (state.status == PartStatus::ESCALATED) {
+      return BT::NodeStatus::FAILURE;
+    }
+
     const auto failure_type =
       state.status == PartStatus::LOST
       ? zebra_bt::FailureType::PART_LOST

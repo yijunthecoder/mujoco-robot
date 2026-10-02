@@ -52,6 +52,11 @@
         </RecoveryPolicy>
 
         <PlacePart part="{part}"/>
+
+        <Fallback name="CheckFacing">
+          <IsPartFacingForward part="{part}"/>
+          <MarkEscalated part="{part}"/>
+        </Fallback>
       </Sequence>
     </Fallback>
   </BehaviorTree>
@@ -67,6 +72,9 @@
       <input_port name="part"/>
     </Condition>
     <Condition ID="IsPartUpright">
+      <input_port name="part"/>
+    </Condition>
+    <Condition ID="IsPartFacingForward">
       <input_port name="part"/>
     </Condition>
     <Action ID="MarkEscalated">
