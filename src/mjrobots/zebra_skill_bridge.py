@@ -87,7 +87,7 @@ from .zebra_facing import (
     FACING_YAW, SHOW_CAMERA, FacingError, can_place, full_yaw_near, held_from_print_in_hand, long_face_view,
     pick_facing,
 )
-from .zebra_flip import PlanningProcess, execute_flip, set_down_kept
+from .zebra_flip import MovePlan, PlanningProcess, execute_flip, set_down_kept
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
     _BRICK_CENTER_OFFSET_Z,
@@ -473,11 +473,11 @@ def run_bridge(
             return Rz @ R, center + perception.rng.normal(0.0, 0.002, 3)
         return look
 
-    def _plan_flip_live(part_id: str, order: list[str]):
+    def _plan_flip_live(part_id: str, order: list[str], allow_move: bool = True):
         """plan_flip in the planning process, from the state right now, while the sim,
         viewer and perception keep running here (the arms are parked, nothing moves)."""
         others = [brick_ids[p] for p in ALL_PART_IDS if p != part_id]
-        pending = planner.start(data, brick_ids[part_id], others, order)
+        pending = planner.start(data, brick_ids[part_id], others, order, allow_move)
         while not pending.done():
             if not viewer.is_running():
                 raise RuntimeError("viewer closed while planning the flip")
@@ -708,9 +708,25 @@ def run_bridge(
                             if plan is None:
                                 raise RuntimeError(f"{label} is {lies} - no way found to flip it (arms not moved)")
                             node.get_logger().info(f"flip plan ({data.time - t0:.1f} s): {plan.describe()}")
+                            # where the other bricks are (sim positions, like the planner's)
+                            others_xy = [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id]
+                            if isinstance(plan, MovePlan):  # no flip where it lies: move it, then plan again
+                                try:
+                                    execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render, clock,
+                                                 _flip_look(part_id), others_xy)
+                                except Exception:
+                                    _let_go_and_park(part_id)
+                                    raise
+                                for _ in range(250):  # let it settle
+                                    sim_step.step(model, data)
+                                    clock.tick()
+                                    render.step()
+                                plan, lies = _plan_flip_live(part_id, order, allow_move=False)
+                                if plan is None:
+                                    raise RuntimeError(f"{label} is {lies} - moved it, but found no way to flip it there "
+                                                       f"(arms not moved)")
+                                node.get_logger().info(f"moved {label}; flip plan from there: {plan.describe()}")
                             try:
-                                # where the other bricks are (sim positions, like the planner's)
-                                others_xy = [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id]
                                 holder = execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render,
                                                       clock, _flip_look(part_id), others_xy, keep=True,
                                                       look_print=lambda d, cam: _print_look(part_id, cam)(d))

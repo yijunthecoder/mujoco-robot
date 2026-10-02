@@ -136,6 +136,14 @@ bridge decides *how*:
 | on its end | 90 deg about its short side | **one hand** if the arm can reach: grip the two long faces, roll the wrist 90 deg, set it down. Else two hands, 45 + 45 deg |
 | upside down | 180 deg | two hands, 90 + 90 deg (one wrist can't turn 180 deg) |
 
+**No flip where it lies? Move it first** (`MovePlan`): most bricks that couldn't be
+flipped lie far out, where an arm can grip them from above but can't reach with its
+hand rolled. Then one arm picks it up as it lies, carries it to a free spot in the
+middle of the area both arms reach (turned 0 or +-90 deg), sets it down the same way
+up, and the flip is planned again from where it landed - all in the one `flip`
+command. Seeds 1-30 dropped, with his tree: flippable bricks 48 -> 73 of 77 (plan
+only), full zebras 7 of 28 -> 17 of 30.
+
 A brick no safe plan fits is answered `FAILED` ("no way found to flip it
 (arms not moved)") and stays where it is; his tree retries, then escalates
 it to a human. Planned on a scratch copy first (nothing moves until a whole

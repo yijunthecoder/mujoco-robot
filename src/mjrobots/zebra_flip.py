@@ -71,6 +71,14 @@ _GRIP_Q = np.array([0.0, 2.23, -1.215, 0.0, 0.0, 0.0])  # the pose grip_quat was
 # the stack spot as well as over the middle (a stack may already stand there).
 _HANDOVER_SPOTS = [np.array([x, y, z]) for z in (0.0, 0.04) for x in (0.35, 0.45) for y in (0.0, 0.12, -0.12)]
 _YAW_TURNS = np.radians([0, 30, -30, 60, -60, 90, -90, 180])  # extra turn about vertical at the handover
+# No flip where it lies? Move it first: an arm picks it as it lies, carries it - turned by one
+# of _MOVE_TURNS about vertical - to one of the _MOVE_SPOTS free spots nearest the middle of
+# the area both arms reach, sets it down the same way up, and it's flipped from there. Over
+# seeds 1-30 (dropped), 29 of 77 non-upright bricks had no flip plan where they lay - mostly
+# far out, where the rolled hand can't reach - and moving them first gave 26 of them one
+# (zebra_scratch/relocate_check.py); the plain pick as it lies almost always works there.
+_MOVE_TURNS = np.radians([0, 90, -90])
+_MOVE_SPOTS = 4
 # How much higher than A's grip B may grip. Only the middle: 0.75 and 1.25 cm used to be
 # allowed (they keep the four fingers apart), but a brick held by its top strip slid
 # out of B's fingers on the way down - 5 of 6 bricks in physics tests, and seed 1's
@@ -194,6 +202,31 @@ class SoloPlan:
                 f"at ({self.set_down[0]:.2f}, {self.set_down[1]:+.2f})")
 
 
+@dataclass
+class MovePlan:
+    """No flip where it lies: pick it as it lies, carry it to `spot` (its centre, same way
+    up, turned about vertical), set it down; `then` is the flip planned from there (the
+    bridge plans it again from where the brick really lands)."""
+    lies: str
+    a_side: str
+    grip_a: float  # A's grip yaw at the pick
+    center: np.ndarray  # brick centre as it lies
+    wA: float
+    spot: np.ndarray  # brick centre where it's set down
+    a_quat: np.ndarray  # A's hand orientation at the set-down (turned)
+    then: "FlipPlan | SoloPlan"
+
+    def describe(self) -> str:
+        return (f"{self.lies}: no flip where it lies - {self.a_side} arm moves it to ({self.spot[0]:.2f}, "
+                f"{self.spot[1]:+.2f}) first, then {self.then.describe()}")
+
+
+def _both_arms_middle() -> np.ndarray:
+    """Centre of the table squares both arms' reach zones cover (where moved bricks go)."""
+    right, left = Zone.load("right"), Zone.load("left")
+    return np.array([c for c in right.cells if left.covers(c)]).mean(axis=0)
+
+
 def free_spots(zone: Zone, center_xy, other_xy, far=False) -> list[np.ndarray]:
     """Table spots (xy) to set a brick down on: where it lay and spots 6 and 10 cm from
     it; or with `far`, the rest of the green zone (nearest first, one every
@@ -254,6 +287,7 @@ class _Planner:
     def __init__(self, model, data, brick_body: int, other_bricks: list[int], arms_order: list[str]):
         self.model, self.real = model, data
         self.brick = brick_body
+        self.other_bricks = list(other_bricks)
         self.geo = _Geoms(model)
         self.obstacles = [g for b in other_bricks for g in self.geo.body(b)]
         self.brick_geoms = self.geo.body(brick_body)
@@ -548,18 +582,63 @@ class _Planner:
                 return (q_turn, spot, q_pre, q_b, q_out, hold)
         return None
 
-    def plan(self, lies, Rb0, center):
+    # --- no flip where it lies: move it first ---
+    def attempt_move(self, lies, Rb0, center, a_side):
+        """A picks it as it lies, carries it to a free spot near the middle (turned by one of
+        _MOVE_TURNS), sets it down the same way up; accepted only if a flip is then planned
+        from there (plan_flip without moving again)."""
+        cfg = _CASES[lies]
+        other = "left" if a_side == "right" else "right"
+        adr = self.model.jnt_qposadr[self.model.body_jntadr[self.brick]]
+        for xy in free_spots(self.zone, _both_arms_middle(), self.other_xy, far=True)[:_MOVE_SPOTS]:
+            for gam in _MOVE_TURNS:
+                d, ctx = self.fresh()
+                cA = ctx[a_side]
+                with _plan_only():
+                    picked = self.pick(d, cA, Rb0, center, cfg["a_axis"])
+                    if picked is None:
+                        return None  # this arm can't pick it at all
+                    grip_a, Rgrasp, _, rel, q_lift = picked
+                    RA = _rot([0, 0, 1.0], gam) @ Rgrasp
+                    spot = np.array([xy[0], xy[1], center[2]])  # the pick puts the grip point at its centre
+                    q_h = self.ik(d, cA, spot + [0, 0, _HOVER_DZ], RA, seed=q_lift)
+                    if q_h is None or not self.joint_path_ok(d, cA, other, q_lift, q_h, rel=rel):
+                        continue
+                    try:
+                        cA.holding = False  # the held brick isn't carried in plan-only mode
+                        move_to_pose(self.model, d, None, None, cA.arm_ctrl, cA.body_id, HAND_LOCAL_OFFSET,
+                                     cA.joint_ids, spot, _quat(RA), lead_in_step=_HELD_JOINT_STEP,
+                                     path_check=cA._check_clearance)
+                    except IKError:
+                        continue
+                # the flip from there, arms at home
+                moved = copy.copy(self.real)
+                R1 = _rot([0, 0, 1.0], gam) @ Rb0
+                q = np.empty(4)
+                mujoco.mju_mat2Quat(q, R1.flatten())
+                moved.qpos[adr:adr + 3] = spot - R1 @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
+                moved.qpos[adr + 3:adr + 7] = q
+                mujoco.mj_forward(self.model, moved)
+                then = _Planner(self.model, moved, self.brick, self.other_bricks, self.arms_order).plan(
+                    lies, R1, spot, allow_move=False)
+                if then is not None:
+                    return MovePlan(lies, a_side, grip_a, center.copy(), cfg["wA"], spot, _quat(RA), then)
+        return None
+
+    def plan(self, lies, Rb0, center, allow_move=True):
         """Quick and likely first: one hand setting it down near where it lay (on its
         side), then the two-hand strategies, then one hand with the far spots (slow when
         nothing fits: tried last, so a two-hand brick isn't kept waiting ~20 s).
         Tried and dropped (2026-10-01): upside down in two steps (one hand onto its side,
         then the on-side flip) planned 2 more of 26 upside-down bricks, but made a
-        "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout."""
+        "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout.
+        `allow_move`: also try moving it first (MovePlan), before the far one-hand spots."""
         cfg = _CASES[lies]
         solo = [lambda side: self.attempt_solo(lies, Rb0, center, side)] if lies in _ONE_HAND else []
         two = [lambda side, r=r: self.attempt(lies, Rb0, center, side, r) for r in cfg["rolls"]]
         slow = [lambda side: self.attempt_solo(lies, Rb0, center, side, far=True)] if lies in _ONE_HAND else []
-        for strategies in (solo, two, slow):
+        move = [lambda side: self.attempt_move(lies, Rb0, center, side)] if allow_move else []
+        for strategies in (solo, two, move, slow):
             for a_side in self.arms_order:
                 for strategy in strategies:
                     p = strategy(a_side)
@@ -569,16 +648,17 @@ class _Planner:
 
 
 def plan_flip(model, data, brick_body: int, other_bricks: list[int],
-              arms_order: list[str]) -> tuple[FlipPlan | SoloPlan | None, str]:
+              arms_order: list[str], allow_move: bool = True) -> tuple[FlipPlan | SoloPlan | MovePlan | None, str]:
     """Plan a flip of `brick_body` from the current state (arms should be at
-    home). Returns (plan, how it lies) - plan None if no strategy works."""
+    home). Returns (plan, how it lies) - plan None if no strategy works; a MovePlan if
+    it has to be moved first (`allow_move`), after which the caller plans again."""
     R = data.xmat[brick_body].reshape(3, 3).copy()
     lies = lying(R)
     if lies not in _CASES:
         return None, lies
     center = data.xpos[brick_body] + R @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
     planner = _Planner(model, data, brick_body, other_bricks, arms_order)
-    return planner.plan(lies, R, center), lies
+    return planner.plan(lies, R, center, allow_move), lies
 
 
 _worker_model = _worker_data = None  # in the planning process (see PlanningProcess)
@@ -590,11 +670,11 @@ def _worker_init(scene_path: str) -> None:
     _worker_data = mujoco.MjData(_worker_model)
 
 
-def _worker_plan(state, brick_body, other_bricks, arms_order):
+def _worker_plan(state, brick_body, other_bricks, arms_order, allow_move=True):
     qpos, qvel, ctrl = state
     _worker_data.qpos[:], _worker_data.qvel[:], _worker_data.ctrl[:] = qpos, qvel, ctrl
     mujoco.mj_forward(_worker_model, _worker_data)
-    return plan_flip(_worker_model, _worker_data, brick_body, other_bricks, arms_order)
+    return plan_flip(_worker_model, _worker_data, brick_body, other_bricks, arms_order, allow_move)
 
 
 class PlanningProcess:
@@ -614,11 +694,11 @@ class PlanningProcess:
         self._pool = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"),
                                          initializer=_worker_init, initargs=(str(scene_path),))
 
-    def start(self, data, brick_body: int, other_bricks: list[int], arms_order: list[str]):
+    def start(self, data, brick_body: int, other_bricks: list[int], arms_order: list[str], allow_move=True):
         """Start planning from `data`'s current state; returns a Future whose .result()
         is plan_flip's (plan, how it lies)."""
         state = (data.qpos.copy(), data.qvel.copy(), data.ctrl.copy())
-        return self._pool.submit(_worker_plan, state, brick_body, list(other_bricks), list(arms_order))
+        return self._pool.submit(_worker_plan, state, brick_body, list(other_bricks), list(arms_order), allow_move)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -868,6 +948,13 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
                   look_print=None):
     if isinstance(plan, SoloPlan):
         _execute_solo(plan, contexts[plan.a_side], render, clock, look, other_xy)
+        return None
+    if isinstance(plan, MovePlan):  # only the move: the caller plans the flip again from where it lands
+        A = contexts[plan.a_side]
+        _hold(A.model, A.data, render, clock, A.this_arm, _GRIP_OPEN, 60)
+        _pick_as_it_lies(A, plan, render, clock)
+        _set_down_seen(A, render, clock, plan.spot, plan.a_quat, look)
+        go_home(A, render, clock)
         return None
     A, B = contexts[plan.a_side], contexts[plan.b_side]
     model, data = A.model, A.data

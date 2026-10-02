@@ -325,8 +325,8 @@ def _regrip_plan(c: ZebraArmContext, options, spot, yaw: float, place_xyz, facin
     pick it and place it facing `facing_yaw`: (spot, 0) if one can already; else the
     first of _REGRIP_TURNS on `spot`; else the first free spot near the stack (and turn)
     - a handover via the table, usually to the other arm. Turned or moved, the option must
-    still work if it lands the margins off. (spot, 0) if nothing helps (the caller then
-    finds no option). `idle()`, if given, is called between the checks (see _show_pose)."""
+    still work if it lands the margins off - put back as it lies too. (spot, 0) if nothing
+    robust is found (the caller then tries the options where it really lands). `idle()`, if given, is called between the checks (see _show_pose)."""
     def works(h, want, y, at):
         if idle is not None:
             idle()
@@ -339,7 +339,9 @@ def _regrip_plan(c: ZebraArmContext, options, spot, yaw: float, place_xyz, facin
                    for h, want, _ in options)
 
     spot = np.asarray(spot, float)
-    if any(works(h, want, yaw, spot) for h, want, _ in options):
+    # put back as it lies - also with the margin: it lands up to ~1 cm off too, and a grip that
+    # only worked exactly in place failed after the put-back (seed 2's legs, 1.1 cm off)
+    if works_if_off(yaw, spot):
         return spot, 0.0
     for turn in _REGRIP_TURNS:
         if _can_set_down_turned(c, spot, turn) and works_if_off(_wrap(yaw + turn), spot):
