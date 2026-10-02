@@ -32,7 +32,7 @@ from . import cartesian_control, sim_step
 from . import zebra_pick_place as zpp
 from .camera_calibration import IMAGE_SIZE
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, solve_ik_pose
-from .scatter import STACK_XY, Zone
+from .scatter import STACK_XY, TABLE_Z, Zone
 from .zebra_flip import _MIN_TABLE_GAP, _plan_only, free_spots, set_down_kept
 from .zebra_pick_place import (
     BRICK_HEIGHT, ZebraArmContext, _BRICK_CENTER_OFFSET_Z, _HOVER_DZ, _wrap, go_home, grasp_part, put_back,
@@ -59,6 +59,10 @@ SHOW_CAMERA = "headcam"
 # held) that left as little as 0.7 cm of it between them and the next move dropped it
 # (seed 3445's legs, upside down). From this one >= 2.2 cm is left (show_drop.py, 12 bricks).
 _SHOW_GRIP_DEPTH = BRICK_HEIGHT / 2 - _MIN_TABLE_GAP
+# ... and never lower than that gap above the table top (= an upright brick's bottom),
+# whatever the look from hover says: a look 7 mm low put the fingertips on the table and
+# the fingers stalled open (seed 24's head).
+_SHOW_GRIP_LOWEST = TABLE_Z + _BRICK_CENTER_OFFSET_Z - BRICK_HEIGHT / 2 + _MIN_TABLE_GAP
 # Held still this long at the show pose before the look: a camera needs the brick at rest
 # for a sharp image (no motion blur), and it lets a person watching see the show.
 _SHOW_STILL_S = 1.0
@@ -373,7 +377,7 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
         return set_down_kept(ctx, render, clock, look_held, other_xy)
 
     c = contexts[arm]
-    grasp_part(c, render, clock, center_xyz, relook=relook, depth=_SHOW_GRIP_DEPTH)
+    grasp_part(c, render, clock, center_xyz, relook=relook, depth=_SHOW_GRIP_DEPTH, lowest=_SHOW_GRIP_LOWEST)
     held = show_and_look(c, render, clock, look_print, idle, on_seen)
     if still_upright is not None and still_upright(c.data) is False:
         # held up to the camera it can swing round between the fingertips (once all the way
@@ -397,6 +401,10 @@ def pick_facing(contexts: dict, arm: str, render, clock, center_xyz, place_xyz, 
     # fingers (up to 1.3 cm and 18 deg in testing) and was then placed off target or fell
     # off the stack - a fresh pick gives a centred grip, and the grip that gives the facing.
     put_at = _put_down(c)
+    if still_upright is not None and still_upright(c.data) is False:
+        # put down turned or on another spot it can tip over (seed 19's head, turned 60 deg):
+        # the tree re-checks it and flips it
+        raise FacingError("it fell over when put back down - it needs flipping", "NEEDS_FLIP")
     if held is None:
         raise FacingError(f"couldn't see which side its print is on (shown to the {SHOW_CAMERA}) - put it back")
     look = relook()

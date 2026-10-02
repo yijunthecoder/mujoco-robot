@@ -225,14 +225,16 @@ def _close_and_settle(ctx: ZebraArmContext, render, clock, max_extra_steps: int 
 
 
 def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None, grip_yaws=None,
-               depth: float = 0.0) -> None:
+               depth: float = 0.0, lowest: float | None = None) -> None:
     """Approach, descend onto, and grip the brick at `center_xyz` (its
     geometric center, not its body origin - see `_BRICK_CENTER_OFFSET_Z`),
     then lift it clear of the table.
 
     `depth`: how far below the centre the grip point (= the fingertips: the
     finger mesh ends there) goes. 0, the default, grips the brick's top half;
-    deeper holds more of it (zebra_facing's show grasp).
+    deeper holds more of it (zebra_facing's show grasp). `lowest`, if given: the
+    grip point never goes below this height, whatever the look says (a look 7 mm low
+    put a deep grasp's fingertips on the table, which then stalled them open).
 
     `relook`, if given, is called once the arm is hovering over the brick,
     before it descends: a no-argument function returning a fresh look at the
@@ -297,7 +299,10 @@ def grasp_part(ctx: ZebraArmContext, render, clock, center_xyz, relook=None, gri
     if grip_yaws is not None:  # a chosen grip only (zebra_facing: the one that gives the wanted facing)
         # a function of the yaw just seen from hover (None if not seen), or fixed grip yaws
         grips = list(grip_yaws(brick_yaw if yaw_seen else None) if callable(grip_yaws) else grip_yaws)
-    grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, center_xyz - np.array([0, 0, depth]), grips)
+    grip_xyz = center_xyz - np.array([0, 0, depth])
+    if lowest is not None:
+        grip_xyz[2] = max(grip_xyz[2], lowest)
+    grip_yaw = _oriented_approach(ctx, render, clock, hover_xyz, grip_xyz, grips)
     ctx.held_yaw = _wrap(brick_yaw - grip_yaw)
     ctx.picked_from = center_xyz.copy()
     _close_and_settle(ctx, render, clock)
