@@ -939,7 +939,7 @@ int main(int argc, char ** argv)
   // Human-readable log format. Must be set BEFORE rclcpp::init —
   // rcutils reads this env var once at startup.
   setenv("RCUTILS_CONSOLE_OUTPUT_FORMAT",
-         "[{severity}] [{date_time_with_ms}] {message}",
+         "[{severity}] {message}",
          1);
 
   rclcpp::init(argc, argv);
