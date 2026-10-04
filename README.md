@@ -56,13 +56,20 @@ The bricks start **scattered and dropped**: each is dropped at a random spot,
 so it lands any way up (see "Dropped bricks" below; `--upright` sets them down
 upright instead). The spots are only where an arm can pick it up and place it on the stack at every angle -
 the green area of the arms' reach maps (see Notes below; `src/mjrobots/scatter.py`,
-at least 10 cm apart and 10 cm clear of the stack). Every run is a new
-random scatter, and the first bridge line says which, e.g.
+at least 10 cm apart and 10 cm clear of the stack). By default a run picks
+one of the **demo seeds 2, 4, 7, 11, 13** (`DEMO_SEEDS` in
+`scripts/zebra_skill_bridge.py`): drops checked to build a full zebra, which
+between them show one-hand and two-hand flips, upside down and the facing
+put-back. This is a demo convenience only - the robot code knows nothing about
+seeds - and these 5 are the quick regression check after a change. `--random`
+gives a new random drop (some land where no flip or facing is possible; those
+bricks get escalated). The first bridge line says which seed, e.g.
 `scatter seed 7: legs (0.51, -0.38) 41 deg, body (0.48, -0.17) 84 deg, ...`.
 Replay a scatter by its seed, or start from the old fixed square spots:
 
 ```bash
 $ bash scripts/run_zebra.sh --scatter 7
+$ bash scripts/run_zebra.sh --random
 $ bash scripts/run_zebra.sh --upright
 $ bash scripts/run_zebra.sh --fixed-start
 ```

@@ -9,6 +9,7 @@ Usage:
     python scripts/zebra_skill_bridge.py
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
     python scripts/zebra_skill_bridge.py --scatter 7      # replay scatter seed 7
+    python scripts/zebra_skill_bridge.py --random         # a new random drop instead of a demo seed
     python scripts/zebra_skill_bridge.py --upright        # set the bricks down upright instead of dropping them
     python scripts/zebra_skill_bridge.py --fixed-start    # old fixed brick spots (upright)
 
@@ -31,6 +32,12 @@ from mjrobots import move_check
 from mjrobots.zebra_skill_bridge import run_bridge
 
 PART_NAMES = {"legs": "31111p0e", "body": "31111p0f", "head": "31111p0g"}
+
+# Demo convenience only: drops checked to build a full zebra with zebra_bt (between
+# them: one-hand and two-hand flips, upside down, the facing put-back). A run picks
+# one of these unless --scatter or --random says otherwise. The robot code itself
+# knows nothing about seeds.
+DEMO_SEEDS = (2, 4, 7, 11, 13)
 
 
 def main() -> None:
@@ -71,7 +78,13 @@ def main() -> None:
     parser.add_argument(
         "--scatter", type=int, default=None, metavar="SEED",
         help="replay this scatter: the bricks are dropped at random spots where the arm can reach "
-             "them - a new random SEED every run unless given (it's printed); same SEED, same drop",
+             "them - one of the demo seeds %s unless given (it's printed); same SEED, same drop"
+             % (DEMO_SEEDS,),
+    )
+    parser.add_argument(
+        "--random", action="store_true",
+        help="a new random drop (any SEED 0-9999) instead of a demo seed - may hit bricks "
+             "that can't be flipped or faced, which then get escalated",
     )
     parser.add_argument(
         "--upright", action="store_true",
@@ -96,8 +109,10 @@ def main() -> None:
         scatter_seed = None
     elif args.scatter is not None:
         scatter_seed = args.scatter
-    else:
+    elif args.random:
         scatter_seed = random.randrange(10_000)
+    else:
+        scatter_seed = random.choice(DEMO_SEEDS)
 
     run_bridge(
         prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,

@@ -9,7 +9,8 @@
 # Usage (from WSL Ubuntu):
 #   bash scripts/run_zebra.sh
 #   bash scripts/run_zebra.sh --arm left      # one arm for everything (default: nearest per brick); extra args go to the bridge
-#   bash scripts/run_zebra.sh --scatter 7     # replay scatter seed 7 (default: new random one)
+#   bash scripts/run_zebra.sh --scatter 7     # replay scatter seed 7 (default: one of the demo seeds 2, 4, 7, 11, 13)
+#   bash scripts/run_zebra.sh --random        # a new random drop instead of a demo seed
 #   bash scripts/run_zebra.sh --upright       # bricks set down upright (default: dropped, any way up)
 #   bash scripts/run_zebra.sh --fixed-start   # bricks upright in the old fixed spots
 
