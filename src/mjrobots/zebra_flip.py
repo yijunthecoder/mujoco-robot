@@ -57,7 +57,7 @@ from . import cartesian_control
 from . import zebra_pick_place as zpp
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, move_to_pose, solve_ik_pose
 from .scatter import (
-    MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_CLEAR, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, Zone, lying,
+    MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, Zone, lying,
 )
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_pick_place import (
@@ -95,7 +95,10 @@ _FAR_SPOT_SPACING = 0.06
 _BACK_OUT = 0.06  # m A's hand backs out along its own fingers after letting go
 _B_APPROACH = 0.08  # m B comes in straight from this far back along its own fingers
 _MIN_LINKS = 0.02  # m arm links apart (as arm_clearance.MIN_ARM_CLEARANCE)
-_MIN_OBSTACLE = 0.01  # m hands / held brick from other bricks
+# m arm / held brick from other bricks: 2 mm more than every executed move is checked with
+# (arm_clearance.MIN_BRICK_CLEARANCE, 1 cm) - the plan samples a path at 12 points, the move
+# at 30, and a plan at exactly 1 cm was refused when done (0.9 cm)
+_MIN_OBSTACLE = 0.012
 # m gripper from the table when one hand sets the brick down with its hand rolled
 # sideways: the gripper then sits beside the brick, only ~2 cm up (its middle).
 _MIN_TABLE_GAP = 0.005
@@ -207,6 +210,14 @@ class SoloPlan:
                 f"at ({self.set_down[0]:.2f}, {self.set_down[1]:+.2f})")
 
 
+# Spots the arms work at (flip set-downs, "move it first", facing put-backs and table
+# handovers) keep this far from the stack - more than the 10 cm bricks are scattered clear of
+# (scatter.STACK_CLEAR, a brick-to-brick distance): working at 10-13 cm the arms came within
+# 1 cm of the tower and arm_clearance refused the moves (seeds 3, 10), and before that rule
+# they knocked it (seeds 3, 5, 20).
+_WORK_STACK_CLEAR = 0.15  # m
+
+
 @dataclass
 class MovePlan:
     """No flip where it lies: pick it as it lies, carry it to `spot` (its centre, same way
@@ -242,7 +253,7 @@ def free_spots(zone: Zone, center_xy, other_xy, far=False) -> list[np.ndarray]:
     center_xy = np.asarray(center_xy)[:2]
 
     def free(xy):
-        return (zone.covers(xy) and np.linalg.norm(xy - STACK_XY) >= STACK_CLEAR
+        return (zone.covers(xy) and np.linalg.norm(xy - STACK_XY) >= _WORK_STACK_CLEAR
                 and all(np.linalg.norm(xy - o) >= MIN_BRICK_GAP for o in other_xy))
 
     near = [xy for xy in [center_xy] + [center_xy + r * np.array([np.cos(a), np.sin(a)])
@@ -363,7 +374,10 @@ class _Planner:
                 if self.geo.dist(d, mine, self.geo.links[other] + self.geo.grip[other]) < _MIN_LINKS:
                     return False
             if self.obstacles:
-                mine = self.geo.grip[c.arm] + (self.brick_geoms if rel is not None else [])
+                # the whole arm, like the check every executed move gets (arm_clearance:
+                # links and fingers): planned with the gripper only, a flip passed here and
+                # was then refused when done ("0.9 cm from another brick")
+                mine = self.geo.links[c.arm] + self.geo.grip[c.arm] + (self.brick_geoms if rel is not None else [])
                 if self.geo.dist(d, mine, self.obstacles) < _MIN_OBSTACLE:
                     return False
         self.set_arm(d, c, q1)

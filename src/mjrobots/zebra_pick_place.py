@@ -115,7 +115,11 @@ class ZebraArmContext:
         # Whether the fingers are holding the brick (wrist turns go gentler).
         self.holding = False
         # Every move is checked against the other arm before it runs.
-        self.clearance = ArmClearance(model, arm)
+        # the other bricks in the scene (sim: the zebra_* bodies - on the robot, the bricks
+        # perception reports) must not be touched by this arm while it handles its own
+        others = [b for b in range(model.nbody) if b != self.brick_id
+                  and (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or "").startswith("zebra_")]
+        self.clearance = ArmClearance(model, arm, others)
         # How far the last placed brick was seen from its target: (xy, z, yaw)
         # in m/m/rad, or None if there was no check or nothing saw it.
         self.place_error: tuple[float, float, float] | None = None
