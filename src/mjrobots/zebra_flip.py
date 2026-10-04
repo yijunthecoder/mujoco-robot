@@ -204,6 +204,7 @@ class SoloPlan:
     set_down: np.ndarray  # upright brick centre on the table where A sets it down
     a_quat: np.ndarray  # A's hand orientation, rolled
     hold_offset: np.ndarray  # A's grip point minus the brick centre, rolled (world, m)
+    where: str = "middle"  # which set-down spots it was planned with (set_down_spots)
 
     def describe(self) -> str:
         return (f"{self.lies}: {self.a_side} arm rolls it 90 deg and sets it down upright itself "
@@ -222,7 +223,7 @@ _WORK_STACK_CLEAR = 0.15  # m
 class MovePlan:
     """No flip where it lies: pick it as it lies, carry it to `spot` (its centre, same way
     up, turned about vertical), set it down; `then` is the flip planned from there (the
-    bridge plans it again from where the brick really lands)."""
+    bridge plans it again from where the brick really lands, trying `then`'s way first)."""
     lies: str
     a_side: str
     grip_a: float  # A's grip yaw at the pick
@@ -481,7 +482,7 @@ class _Planner:
                             go_home(cA, None, None)
                         except IKError:
                             continue
-                        return SoloPlan(lies, a_side, grip_a, center.copy(), wA, q_h, spot, _quat(RA), hold)
+                        return SoloPlan(lies, a_side, grip_a, center.copy(), wA, q_h, spot, _quat(RA), hold, where)
         return None
 
     # --- one strategy, two hands ---
@@ -653,14 +654,24 @@ class _Planner:
                     return MovePlan(lies, a_side, grip_a, center.copy(), cfg["wA"], spot, _quat(RA), then)
         return None
 
-    def plan(self, lies, Rb0, center, allow_move=True):
+    def plan(self, lies, Rb0, center, allow_move=True, prefer=None):
         """Quick and likely first: one hand setting it down near where it lay (on its
         side), then the two-hand strategies, then one hand with the far spots (slow when
         nothing fits: tried last, so a two-hand brick isn't kept waiting ~20 s).
         Tried and dropped (2026-10-01): upside down in two steps (one hand onto its side,
         then the on-side flip) planned 2 more of 26 upside-down bricks, but made a
         "no plan" answer take up to 44-69 s, past zebra_bt's 30 s flip timeout.
-        `allow_move`: also try moving it first (MovePlan), before the far one-hand spots."""
+        `allow_move`: also try moving it first (MovePlan), before the far one-hand spots.
+        `prefer`: a plan made earlier for about this pose (a MovePlan's `then`): its
+        strategy (same arm, roll or set-down spots) is tried first, still checked from the
+        pose now; if it doesn't fit, the usual order follows."""
+        if prefer is not None and prefer.lies == lies:
+            if isinstance(prefer, SoloPlan):
+                p = self.attempt_solo(lies, Rb0, center, prefer.a_side, prefer.where)
+            else:
+                p = self.attempt(lies, Rb0, center, prefer.a_side, prefer.roll_a)
+            if p is not None:
+                return p
         cfg = _CASES[lies]
         one = lies in _ONE_HAND
         solo = [lambda side: self.attempt_solo(lies, Rb0, center, side, "middle")] if one else []
@@ -680,17 +691,19 @@ class _Planner:
 
 
 def plan_flip(model, data, brick_body: int, other_bricks: list[int],
-              arms_order: list[str], allow_move: bool = True) -> tuple[FlipPlan | SoloPlan | MovePlan | None, str]:
+              arms_order: list[str], allow_move: bool = True,
+              prefer: FlipPlan | SoloPlan | None = None) -> tuple[FlipPlan | SoloPlan | MovePlan | None, str]:
     """Plan a flip of `brick_body` from the current state (arms should be at
     home). Returns (plan, how it lies) - plan None if no strategy works; a MovePlan if
-    it has to be moved first (`allow_move`), after which the caller plans again."""
+    it has to be moved first (`allow_move`), after which the caller plans again, passing
+    the MovePlan's `then` as `prefer` (tried first, see _Planner.plan)."""
     R = data.xmat[brick_body].reshape(3, 3).copy()
     lies = lying(R)
     if lies not in _CASES:
         return None, lies
     center = data.xpos[brick_body] + R @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
     planner = _Planner(model, data, brick_body, other_bricks, arms_order)
-    return planner.plan(lies, R, center, allow_move), lies
+    return planner.plan(lies, R, center, allow_move, prefer), lies
 
 
 _worker_model = _worker_data = None  # in the planning process (see PlanningProcess)
@@ -702,11 +715,11 @@ def _worker_init(scene_path: str) -> None:
     _worker_data = mujoco.MjData(_worker_model)
 
 
-def _worker_plan(state, brick_body, other_bricks, arms_order, allow_move=True):
+def _worker_plan(state, brick_body, other_bricks, arms_order, allow_move=True, prefer=None):
     qpos, qvel, ctrl = state
     _worker_data.qpos[:], _worker_data.qvel[:], _worker_data.ctrl[:] = qpos, qvel, ctrl
     mujoco.mj_forward(_worker_model, _worker_data)
-    return plan_flip(_worker_model, _worker_data, brick_body, other_bricks, arms_order, allow_move)
+    return plan_flip(_worker_model, _worker_data, brick_body, other_bricks, arms_order, allow_move, prefer)
 
 
 class PlanningProcess:
@@ -726,11 +739,13 @@ class PlanningProcess:
         self._pool = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"),
                                          initializer=_worker_init, initargs=(str(scene_path),))
 
-    def start(self, data, brick_body: int, other_bricks: list[int], arms_order: list[str], allow_move=True):
+    def start(self, data, brick_body: int, other_bricks: list[int], arms_order: list[str], allow_move=True,
+              prefer=None):
         """Start planning from `data`'s current state; returns a Future whose .result()
         is plan_flip's (plan, how it lies)."""
         state = (data.qpos.copy(), data.qvel.copy(), data.ctrl.copy())
-        return self._pool.submit(_worker_plan, state, brick_body, list(other_bricks), list(arms_order), allow_move)
+        return self._pool.submit(_worker_plan, state, brick_body, list(other_bricks), list(arms_order), allow_move,
+                                 prefer)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)

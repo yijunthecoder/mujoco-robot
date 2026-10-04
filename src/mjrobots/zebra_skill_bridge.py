@@ -473,11 +473,11 @@ def run_bridge(
             return Rz @ R, center + perception.rng.normal(0.0, 0.002, 3)
         return look
 
-    def _plan_flip_live(part_id: str, order: list[str], allow_move: bool = True):
+    def _plan_flip_live(part_id: str, order: list[str], allow_move: bool = True, prefer=None):
         """plan_flip in the planning process, from the state right now, while the sim,
         viewer and perception keep running here (the arms are parked, nothing moves)."""
         others = [brick_ids[p] for p in ALL_PART_IDS if p != part_id]
-        pending = planner.start(data, brick_ids[part_id], others, order, allow_move)
+        pending = planner.start(data, brick_ids[part_id], others, order, allow_move, prefer)
         while not pending.done():
             if not viewer.is_running():
                 raise RuntimeError("viewer closed while planning the flip")
@@ -730,11 +730,13 @@ def run_bridge(
                                     sim_step.step(model, data)
                                     clock.tick()
                                     render.step()
-                                plan, lies = _plan_flip_live(part_id, order, allow_move=False)
+                                t1 = data.time
+                                plan, lies = _plan_flip_live(part_id, order, allow_move=False, prefer=plan.then)
                                 if plan is None:
                                     raise RuntimeError(f"{label} is {lies} - moved it, but found no way to flip it there "
                                                        f"(arms not moved)")
-                                node.get_logger().info(f"moved {label}; flip plan from there: {plan.describe()}")
+                                node.get_logger().info(f"moved {label}; flip plan from there ({data.time - t1:.1f} s): "
+                                                       f"{plan.describe()}")
                             try:
                                 holder = execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render,
                                                       clock, _flip_look(part_id), others_xy, keep=True,
