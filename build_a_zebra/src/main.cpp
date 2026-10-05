@@ -713,18 +713,31 @@ public:
     if (result == "SUCCEEDED") {
       wm_->setOrientation(part_, Orientation::UPRIGHT);
       wm_->resetFlipAttempts(part_);
-      RCLCPP_INFO(
-        logger_,
-        "[FLIP]    %s: SUCCESS (attempt %d)",
-        prettyPart(part_, roles_).c_str(), attempt_);
+      RCLCPP_INFO(logger_, "[FLIP]    %s: SUCCESS (attempt %d)",
+                  prettyPart(part_, roles_).c_str(), attempt_);
       return BT::NodeStatus::SUCCESS;
     }
 
-    if (result == "FAILED" || ++wait_ticks_ > 240) {
-      RCLCPP_WARN(
-        logger_,
-        "[FLIP]    %s: FAILED (attempt %d) -- timeout after 120s",
-        prettyPart(part_, roles_).c_str(), attempt_);
+    if (result == "FAILED") {
+      const std::string reason_code = bridge_->reason(command_id_);
+      const std::string message_txt = bridge_->message(command_id_);
+
+      if (reason_code == "NO_FLIP_PLAN") {
+        // No flip fits the current pose — retrying without moving the brick won't help
+        wm_->setPartStatus(part_, PartStatus::ESCALATED);
+        RCLCPP_ERROR(logger_, "[FLIP]    %s: PERMANENT FAILURE -- %s",
+                     prettyPart(part_, roles_).c_str(), message_txt.c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+
+      RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- %s",
+                  prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
+      return BT::NodeStatus::FAILURE;
+    }
+
+    if (++wait_ticks_ > 240) {
+      RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- timeout after 120s",
+                  prettyPart(part_, roles_).c_str(), attempt_);
       return BT::NodeStatus::FAILURE;
     }
 
