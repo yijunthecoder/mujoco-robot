@@ -14,6 +14,7 @@ Usage:
     python scripts/zebra_skill_bridge.py --drop           # drop the bricks anywhere in reach (random tumbles)
     python scripts/zebra_skill_bridge.py --upright        # upright bricks anywhere in reach
     python scripts/zebra_skill_bridge.py --fixed-start    # old fixed brick spots (upright)
+    python scripts/zebra_skill_bridge.py --headless --speed 4 --demo 2   # no window, 4x faster (tests)
 
 Also publishes perception (/zebra/perception_updates) from this same
 simulation, so don't run scripts/zebra_publisher.py alongside it - that one
@@ -107,6 +108,15 @@ def main() -> None:
         help="start the bricks upright in their old fixed square spots instead of scattering them",
     )
     parser.add_argument(
+        "--headless", action="store_true",
+        help="no MuJoCo window - for automated checks (scripts/check_demos.sh); stop with Ctrl+C",
+    )
+    parser.add_argument(
+        "--speed", type=float, default=1.0,
+        help="run the simulation this many times faster than real time - only with --headless "
+             "(same moves and decisions, less waiting; default 1)",
+    )
+    parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
              "'first' move only, 'all' moves, or 'off' (default)",
@@ -116,6 +126,8 @@ def main() -> None:
     if sum((args.drop, args.upright, args.fixed_start)) > 1:
         parser.error("pick one of --drop, --upright, --fixed-start")
     start = "drop" if args.drop else "upright" if args.upright else "place"
+    if args.speed != 1.0 and not args.headless:
+        parser.error("--speed is for --headless runs only: the window shows the robot at real speed")
     if args.demo is not None and (args.scatter is not None or args.random or start != "place" or args.fixed_start):
         parser.error("--demo is a placed start: it doesn't go with --scatter, --random, --drop, "
                      "--upright or --fixed-start")
@@ -140,6 +152,8 @@ def main() -> None:
         knock_later=PART_NAMES[args.knock_later] if args.knock_later else None,
         scatter_seed=scatter_seed,
         start=start,
+        speed=args.speed,
+        headless=args.headless,
     )
 
 

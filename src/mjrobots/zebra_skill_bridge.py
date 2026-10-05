@@ -216,6 +216,22 @@ class _PerceivingSync:
         self._perception.maybe_publish()
 
 
+class _NoViewer:
+    """Stands in for the MuJoCo window in a headless run: always "open", nothing drawn."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self) -> None:
+        pass
+
+
 def run_bridge(
     prefer_gl: str = "egl",
     scene_path: str | None = None,
@@ -228,6 +244,8 @@ def run_bridge(
     knock_later: str | None = None,
     scatter_seed: int | None = None,
     start: str = "place",
+    speed: float = 1.0,
+    headless: bool = False,
 ) -> None:
     """`arm` is "nearest" (each brick picked by the arm nearest to it, see
     the module docstring) or "left"/"right" (that arm does everything).
@@ -258,7 +276,15 @@ def run_bridge(
     `fault_bump` also makes each missed pick knock the brick `_BUMP` away and
     perception lose track of it for `_BUMP_LOST_S` - so zebra_bt sees the part
     LOST (not just PICK_FAILED) and re-locates it instead of retrying the old
-    position."""
+    position.
+
+    `speed`: how many times faster than real time the simulation runs - for headless
+    tests only (no one watching; the same moves, physics and decisions, less waiting).
+    Live runs keep 1: the viewer shows the robot at its real speed. Checked on the 5
+    demos at 4x: same flips, same placements, ~1 min each instead of ~3.
+
+    `headless`: no MuJoCo window (automated checks, scripts/check_demos.sh) - runs until
+    stopped (Ctrl+C / killed)."""
     from .gl import configure_gl
 
     configure_gl(prefer_gl)
@@ -290,7 +316,7 @@ def run_bridge(
     # B's hand camera at a flip handover) - for perception's FACING field (_known_facing):
     print_seen_by: dict[str, str] = {}  # part id -> arm holding it, its ctx.held_yaw the full one
     print_yaw: dict[str, float] = {}  # placed: its full yaw on the stack
-    clock = _RealtimeClock(dt=sim_step.CONTROL_DT)
+    clock = _RealtimeClock(dt=sim_step.CONTROL_DT / speed)
 
     fault_picks = 0  # picks of fault_part seen so far
 
@@ -510,7 +536,7 @@ def run_bridge(
             node.get_logger().error(f"couldn't park the {'/'.join(left_out)} arm after the failed flip: {problem}")
 
     try:
-        with mujoco.viewer.launch_passive(model, data) as viewer:
+        with (_NoViewer() if headless else mujoco.viewer.launch_passive(model, data)) as viewer:
             render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), perception)
             node.get_logger().info(
                 f"Ready - watching {COMMAND_TOPIC} for legs/body/head "

@@ -35,6 +35,24 @@ meshes directly).
 
 All commands are run from `/mnt/c/intern/mujoco-robot` in WSL.
 
+### Checking a change (run this after every change)
+
+```bash
+$ bash scripts/check_demos.sh          # all 5 demos, ~3 min
+$ bash scripts/check_demos.sh 2 5      # just demos 2 and 5
+```
+
+Runs the 5 demos (see below) with Victor's tree, headless (`--headless`: no
+window) and 4x faster than real time (`--speed 4`: same moves, physics and
+decisions - checked: the same flips and placements as at real speed, ~1 min
+per demo instead of ~3). Each runs on its own ROS domain (91-93), so they
+never clash with a live run (42). It prints one block per demo - full zebra
+or not, time, each flip, how far off each brick was placed, any problem - and
+"N of 5 built a full zebra" (exit code 0 only if all did). Logs are kept in
+`logs/check_demos/` until the next check; `scripts/demo_report.py` makes the
+same report from any saved log. Each demo needs ~1.3 GB of RAM: `PARALLEL=2`
+runs fewer at once.
+
 ### Zebra pick/place with Victor's behavior tree (the main one)
 
 Starts Victor's `zebra_bt` tree and our skill bridge together in one
@@ -720,6 +738,30 @@ no plan now takes longer to say so (the far one-hand search: up to ~39 s with
 4 tests in parallel, past the 30 s timeout); which way the print
 faces at the stack (perception only knows the angle up to 180 deg); the
 brick's 3D pose comes from the simulation (a stand-in for a detector).
+
+### A brick creeps in the fingers - a simulation effect (2026-10-05)
+
+A brick held tilted (the show to the headcam, a flip roll) slides 1-2 cm down
+in the fingers. It is **not a weak grip**: the fingers squeeze 5 N each with
+friction 1.0, ~10 N against a 0.03 kg (0.3 N) brick - 30x what's needed. It is
+MuJoCo's soft contacts *creeping*: with the hand held perfectly still after the
+show, the brick kept sliding ~0.1 cm/s, and one of 9 fell out within 10 s
+(zebra_scratch/slide_hold.py, seeds 4/7/13, all three bricks each):
+
+| physics | slid after the show | after 10 s held still | fell out |
+|---|---|---|---|
+| as now | 1.56 cm | 3.23 cm (max 10) | 1 of 9 |
+| `noslip_iterations="10"` | 1.22 | 1.18 (no creep) | 0 |
+| elliptic cone, impratio 10 | 1.18 | 1.09 | 0 |
+| brick + finger contacts `solref="0.005 1" solimp="0.95 0.99 0.001"` | 0.60 | 0.64 | 0 |
+| both of the last two | **0.62** | **0.38** (settles, no creep) | 0 |
+
+The last row behaves like a real gripper and costs little (physics 8% -> 12%
+of real time). **Not applied**: it changes how every brick sits on the stack
+and rolls in a flip, and the demos are tuned and checked with today's physics -
+switching means re-checking all of them. A real gripper doesn't creep, so no
+robot code depends on it; the real-robot answer is that ~5 N per finger is
+plenty. The ~1 cm sag at a handover (the known issue above) is this creep.
 
 ## Menagerie location
 
