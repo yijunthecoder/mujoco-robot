@@ -140,6 +140,10 @@ class ZebraPerceptionPublisher(Node):
         # `lose_track`).
         self.lost_until: dict[str, float] = {pid: 0.0 for pid in self.part_ids}
         self._last_publish = float("-inf")
+        # what was last printed per part: a status is printed only when it changes (it's
+        # still published every interval) - printed every 0.5 s for 3 parts it buried
+        # everything else, the --confirm-moves prompt included
+        self._last_shown: dict[str, str] = {}
 
         if model is None:
             model = mujoco.MjModel.from_xml_path(str(scene_path or _DEFAULT_SCENE))
@@ -238,7 +242,10 @@ class ZebraPerceptionPublisher(Node):
         msg = String()
         msg.data = line
         self.publisher.publish(msg)
-        self._log(shown)
+        pid = line.split(",", 1)[0]
+        if self._last_shown.get(pid) != shown:
+            self._last_shown[pid] = shown
+            self._log(shown)
 
     @staticmethod
     def _log(text: str) -> None:

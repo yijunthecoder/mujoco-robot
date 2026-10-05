@@ -30,7 +30,6 @@ from .cartesian_control import (
     move_to_point,
     move_to_pose,
     _confirm_and_follow,
-    _hand_point_and_jac,
 )
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .stationlite_pick_place import (
