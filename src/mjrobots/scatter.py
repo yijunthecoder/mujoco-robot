@@ -19,6 +19,11 @@ random zone spot, tumbled to a random 3D rotation, and lands however physics
 lets it - measured over 100 drops from 15 cm: 43% on a long side, 24%
 upside down, 17% on an end, only 16% upright. `lying` names how a brick
 lies, from its rotation.
+
+`place_bricks` (the bridge's default start) sets each brick down inside
+PLACE_BOX, any way up but at an angle in PLACE_YAWS - the spots and angles
+where a brick that isn't upright can be flipped right where it lies (see
+PLACE_BOX). On the real table: a box taped on it, bricks put inside it.
 """
 
 from __future__ import annotations
@@ -44,6 +49,17 @@ _DROP_SETTLE_STEPS = 1500  # 3 s: fall, bounce, come to rest
 # How a brick can lie (`lying`). Body axes: z = the studs' direction (up when
 # UPRIGHT), x = the long side (6.4 cm), y = the short side (3.2 cm).
 UPRIGHT, UPSIDE_DOWN, ON_SIDE, ON_END, TILTED = "UPRIGHT", "UPSIDE_DOWN", "ON_SIDE", "ON_END", "TILTED"
+_BRICK_HALF = np.array([0.032, 0.016, 0.0192])  # half the brick's size along its x, y, z (m)
+
+# Where place_bricks puts the bricks: brick centres in this box (x range, y range, m), turned
+# about vertical by an angle in one of the ranges for how it lies (deg, the angle of the
+# turn from lying along x). Measured with the flip planner (flip where it lies, no "move it
+# first"), 2026-10-05: upside down flips at 75 and 105 deg everywhere in the box but at 0
+# and 90 deg nowhere on the table (the rolled wrist can't turn that way); on its side or
+# end flips at 60-120 deg; out at |y| 0.18 a quarter of them fail, and at x 0.23 no
+# upside-down brick flips. Inside the box at these angles a flip is found in ~2-7 s.
+PLACE_BOX = ((0.29, 0.47), (-0.12, 0.12))
+PLACE_YAWS = {"UPSIDE_DOWN": ((70, 80), (100, 110)), "other": ((60, 120),)}
 
 
 class Zone:
@@ -193,6 +209,70 @@ def drop_bricks(model, data, bodies, seed: int, zone: Zone, height: float = DROP
         landed[body] = (float(data.xpos[b][0]), float(data.xpos[b][1]),
                         float(np.degrees(table_yaw(R))), lying(R))
     return landed
+
+
+def _axis_rot(axis: int, deg: float) -> np.ndarray:
+    """Rotation by `deg` about body axis `axis` (0 = x, 1 = y, 2 = z)."""
+    c, s = np.cos(np.radians(deg)), np.sin(np.radians(deg))
+    i, j = [k for k in range(3) if k != axis]
+    R = np.eye(3)
+    R[i, i], R[i, j], R[j, i], R[j, j] = c, -s, s, c
+    return R
+
+
+# Each way a brick can be put down: its rotation before turning it about vertical. On its side
+# and on its end each have two (which face is down) - they're flipped with opposite rolls.
+_PLACE_POSES = {
+    UPRIGHT: [np.eye(3)],
+    ON_SIDE: [_axis_rot(0, 90), _axis_rot(0, -90)],
+    ON_END: [_axis_rot(1, 90), _axis_rot(1, -90)],
+    UPSIDE_DOWN: [_axis_rot(0, 180)],
+}
+
+
+def place_bricks(model, data, bodies, seed: int, box=PLACE_BOX, yaws=PLACE_YAWS,
+                 max_tries: int = 10_000) -> dict:
+    """Set each brick in `bodies` down at a random spot in `box` (MIN_BRICK_GAP apart and
+    STACK_CLEAR from the stack, as in scatter_bricks), lying a random way up (upright, on
+    its side, on its end or upside down - equally likely), turned by an angle in one of
+    `yaws`' ranges for how it lies, then let physics settle them. Same `seed`, same start. Returns {body: (x, y, yaw_deg,
+    lying)} as they rest, like drop_bricks."""
+    rng = np.random.default_rng(seed)
+    (x0, x1), (y0, y1) = box
+    spots: list[np.ndarray] = []
+    ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body) for body in bodies]
+    for body, b in zip(bodies, ids):
+        for _ in range(max_tries):
+            xy = np.array([rng.uniform(x0, x1), rng.uniform(y0, y1)])
+            if np.linalg.norm(xy - STACK_XY) >= STACK_CLEAR and all(
+                    np.linalg.norm(xy - s) >= MIN_BRICK_GAP for s in spots):
+                break
+        else:
+            raise RuntimeError(f"couldn't find a free spot for {body} in the box {box}")
+        spots.append(xy)
+        how = (UPRIGHT, ON_SIDE, ON_END, UPSIDE_DOWN)[rng.integers(4)]
+        ranges = yaws.get(how, yaws["other"])
+        yaw = rng.uniform(*ranges[rng.integers(len(ranges))])
+        poses = _PLACE_POSES[how]
+        R = _axis_rot(2, yaw) @ poses[rng.integers(len(poses))]
+        half_height = abs(R[2]) @ _BRICK_HALF  # the brick's half height as it lies
+        center = np.array([xy[0], xy[1], TABLE_Z - 2 * _BRICK_HALF[2] + half_height + 0.001])
+        q = np.empty(4)
+        mujoco.mju_mat2Quat(q, R.flatten())
+        adr = model.jnt_qposadr[model.body_jntadr[b]]
+        data.qpos[adr:adr + 3] = center + R @ np.array([0, 0, _BRICK_HALF[2]])  # origin: top face centre
+        data.qpos[adr + 3:adr + 7] = q
+        dof = model.jnt_dofadr[model.body_jntadr[b]]
+        data.qvel[dof:dof + 6] = 0
+    mujoco.mj_forward(model, data)
+    for _ in range(_SETTLE_STEPS):
+        sim_step.step(model, data)
+    placed = {}
+    for body, b in zip(bodies, ids):
+        R = data.xmat[b].reshape(3, 3)
+        placed[body] = (float(data.xpos[b][0]), float(data.xpos[b][1]),
+                        float(np.degrees(table_yaw(R))), lying(R))
+    return placed
 
 
 def describe(placed: dict) -> str:

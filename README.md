@@ -52,27 +52,40 @@ press Ctrl+C to stop both.
 $ bash scripts/run_zebra.sh
 ```
 
-The bricks start **scattered and dropped**: each is dropped at a random spot,
-so it lands any way up (see "Dropped bricks" below; `--upright` sets them down
-upright instead). The spots are only where an arm can pick it up and place it on the stack at every angle -
-the green area of the arms' reach maps (see Notes below; `src/mjrobots/scatter.py`,
-at least 10 cm apart and 10 cm clear of the stack). By default a run picks
-one of the **demo seeds 2, 4, 7, 11, 13** (`DEMO_SEEDS` in
-`scripts/zebra_skill_bridge.py`): drops checked to build a full zebra, which
-between them show one-hand and two-hand flips, upside down and the facing
-put-back. This is a demo convenience only - the robot code knows nothing about
-seeds - and these 5 are the quick regression check after a change. `--random`
-gives a new random drop (some land where no flip or facing is possible; those
-bricks get escalated). The first bridge line says which seed, e.g.
-`scatter seed 7: legs (0.51, -0.38) 41 deg, body (0.48, -0.17) 84 deg, ...`.
-Replay a scatter by its seed, or start from the old fixed square spots:
+The bricks start **placed in a box, any way up** (`scatter.place_bricks`):
+each is set down at a random spot inside `PLACE_BOX` (brick centres at x
+0.29-0.47 m, y -0.12..+0.12 m, at least 10 cm apart and 10 cm clear of the
+stack), upright, on its side, on its end or upside down (equally likely),
+turned to an angle where it can be flipped right where it lies - on its side
+or end 60-120 deg, upside down 70-80 or 100-110 deg (0 deg = long side along x).
+Those limits were measured with the flip planner (2026-10-05): upside down
+can't be flipped at 0 or 90 deg anywhere on the table, and further out the
+rolled wrist can't reach. On the real table this is a box taped on it, the
+bricks put inside it diagonally. Inside the box a flip is planned in ~2-7 s
+and never needs "move it first".
+
+By default a run picks one of the **demo seeds 3, 4, 6, 15, 23** (`DEMO_SEEDS` in
+`scripts/zebra_skill_bridge.py`): starts checked to build a full zebra, which
+between them show every way a brick can lie and the two-hand flip of an
+upside-down brick. This is a demo convenience only - the robot code knows
+nothing about seeds - and they are the quick regression check after a change.
+`--random` gives a new random start. The first bridge line says which seed, e.g.
+`place seed 4: legs (0.45, -0.10) 83 deg ON_SIDE, body (0.47, +0.08) 7 deg ON_END, ...`.
+Replay a start by its seed, drop the bricks anywhere in reach instead (see
+"Dropped bricks" below), scatter them upright anywhere in reach, or start from
+the old fixed square spots:
 
 ```bash
 $ bash scripts/run_zebra.sh --scatter 7
 $ bash scripts/run_zebra.sh --random
+$ bash scripts/run_zebra.sh --drop
 $ bash scripts/run_zebra.sh --upright
 $ bash scripts/run_zebra.sh --fixed-start
 ```
+
+`--drop` and `--upright` use the whole green area of the arms' reach maps
+(see Notes below): the spots where an arm can pick a brick up and place it on
+the stack at every angle.
 
 **Nearest arm per brick.** A brick in only one arm's green area is picked
 by that arm; in both (the middle) or neither, by the arm whose base is closer
@@ -100,8 +113,7 @@ left. Place error 0.9 cm average; the arms never came closer than 8.1 cm
 grip isn't reachable at the stack - it never happened from the fixed square
 spots.
 
-**Dropped bricks** (the default; `--upright` for the old upright scatter,
-`--drop` is still accepted): each brick is dropped from 15 cm above a random
+**Dropped bricks** (`--drop`; the default until 2026-10-05): each brick is dropped from 15 cm above a random
 spot with a random tumble and lands however physics lets it - so, like a
 real messy table, usually not upright. Measured over 400 drops: 46% on a long
 side, 21% upside down, 16% on an end, only **17% upright**; all three

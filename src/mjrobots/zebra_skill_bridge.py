@@ -81,7 +81,8 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .scatter import STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying, scatter_bricks
+from .scatter import (STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying,
+                      place_bricks, scatter_bricks)
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_facing import (
     FACING_YAW, SHOW_CAMERA, FacingError, can_place, full_yaw_near, held_from_print_in_hand, long_face_view,
@@ -226,18 +227,19 @@ def run_bridge(
     knock_placed: str | None = None,
     knock_later: str | None = None,
     scatter_seed: int | None = None,
-    drop: bool = False,
+    start: str = "place",
 ) -> None:
     """`arm` is "nearest" (each brick picked by the arm nearest to it, see
     the module docstring) or "left"/"right" (that arm does everything).
 
-    `scatter_seed`, if given, starts the bricks at random spots and angles
-    (upright) in the arms' measured reach zone instead of their fixed square
-    spots - see scatter.py. Same seed, same scatter. With `drop`, they're
-    dropped instead (random tumbles, landing any way up - scatter.drop_bricks);
-    a pick of a brick that isn't upright fails before the arm moves, saying
-    how it lies (only top-down grips exist), and his tree sends "flip" first
-    (both arms needed: arm="nearest").
+    `scatter_seed`, if given, starts the bricks at random spots instead of their
+    fixed square spots - see scatter.py; same seed, same start. `start` says how:
+    "place" (set down in scatter.PLACE_BOX any way up, at angles where they can be
+    flipped where they lie - scatter.place_bricks), "drop" (dropped anywhere in the
+    reach zone, random tumbles - scatter.drop_bricks) or "upright" (upright anywhere
+    in the reach zone - scatter.scatter_bricks). A pick of a brick that isn't upright
+    fails before the arm moves, saying how it lies (only top-down grips exist), and
+    his tree sends "flip" first (both arms needed: arm="nearest").
 
     `knock_later` (a part id) is a test hook: once that part has been placed
     and its landing checked, it's knocked `_KNOCK` off the stack - so the
@@ -269,11 +271,12 @@ def run_bridge(
     arms = ("left", "right") if arm == "nearest" else (arm,)
     scattered = None
     if scatter_seed is not None:
-        start = drop_bricks if drop else scatter_bricks
-        scattered = start(
-            model, data, [PART_BODIES[pid] for pid in ALL_PART_IDS], scatter_seed,
-            Zone.load("either" if arm == "nearest" else arm),
-        )
+        bodies = [PART_BODIES[pid] for pid in ALL_PART_IDS]
+        if start == "place":
+            scattered = place_bricks(model, data, bodies, scatter_seed)
+        else:
+            setup = {"drop": drop_bricks, "upright": scatter_bricks}[start]
+            scattered = setup(model, data, bodies, scatter_seed, Zone.load("either" if arm == "nearest" else arm))
 
     # One pick/place context per arm and part (own brick).
     contexts = {(a, pid): ZebraArmContext(model, data, a, PART_BODIES[pid])
@@ -303,7 +306,7 @@ def run_bridge(
         part_ids=ALL_PART_IDS, interval=0.5, model=model, data=data, use_timer=False
     )
     if scattered is not None:
-        node.get_logger().info(f"{'drop' if drop else 'scatter'} seed {scatter_seed}: {describe(scattered)}")
+        node.get_logger().info(f"{start} seed {scatter_seed}: {describe(scattered)}")
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(perception)

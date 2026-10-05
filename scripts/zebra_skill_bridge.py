@@ -8,9 +8,10 @@ Requires ROS2 sourced first:
 Usage:
     python scripts/zebra_skill_bridge.py
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
-    python scripts/zebra_skill_bridge.py --scatter 7      # replay scatter seed 7
-    python scripts/zebra_skill_bridge.py --random         # a new random drop instead of a demo seed
-    python scripts/zebra_skill_bridge.py --upright        # set the bricks down upright instead of dropping them
+    python scripts/zebra_skill_bridge.py --scatter 4      # replay start seed 4
+    python scripts/zebra_skill_bridge.py --random         # a new random start instead of a demo seed
+    python scripts/zebra_skill_bridge.py --drop           # drop the bricks anywhere in reach (random tumbles)
+    python scripts/zebra_skill_bridge.py --upright        # upright bricks anywhere in reach
     python scripts/zebra_skill_bridge.py --fixed-start    # old fixed brick spots (upright)
 
 Also publishes perception (/zebra/perception_updates) from this same
@@ -33,11 +34,11 @@ from mjrobots.zebra_skill_bridge import run_bridge
 
 PART_NAMES = {"legs": "31111p0e", "body": "31111p0f", "head": "31111p0g"}
 
-# Demo convenience only: drops checked to build a full zebra with zebra_bt (between
-# them: one-hand and two-hand flips, upside down, the facing put-back). A run picks
-# one of these unless --scatter or --random says otherwise. The robot code itself
-# knows nothing about seeds.
-DEMO_SEEDS = (2, 4, 7, 11, 13)
+# Demo convenience only: placed starts (the default, scatter.place_bricks) checked to build
+# a full zebra with zebra_bt - between them every way a brick can lie, and the two-hand
+# flip of an upside-down brick. A run picks one of these unless --scatter, --random,
+# --drop or --upright says otherwise. The robot code itself knows nothing about seeds.
+DEMO_SEEDS = (3, 4, 6, 15, 23)
 
 
 def main() -> None:
@@ -77,25 +78,27 @@ def main() -> None:
     )
     parser.add_argument(
         "--scatter", type=int, default=None, metavar="SEED",
-        help="replay this scatter: the bricks are dropped at random spots where the arm can reach "
-             "them - one of the demo seeds %s unless given (it's printed); same SEED, same drop"
-             % (DEMO_SEEDS,),
+        help="replay this start: by default the bricks are set down inside the box where they can "
+             "be flipped where they lie, any way up (scatter.place_bricks) - one of the demo seeds "
+             "%s unless given (it's printed); same SEED, same start" % (DEMO_SEEDS,),
     )
     parser.add_argument(
         "--random", action="store_true",
-        help="a new random drop (any SEED 0-9999) instead of a demo seed - may hit bricks "
-             "that can't be flipped or faced, which then get escalated",
+        help="a new random start (any SEED 0-9999) instead of a demo seed",
+    )
+    parser.add_argument(
+        "--drop", action="store_true",
+        help="drop the bricks from 15 cm anywhere the arms reach, random tumbles, instead of placing "
+             "them in the box - some land where no flip or facing is possible (they get escalated)",
     )
     parser.add_argument(
         "--upright", action="store_true",
-        help="set the bricks down upright at their scatter spots instead of dropping them from 15 cm "
-             "with random tumbles (by default they land any way up; perception reports how)",
+        help="set the bricks down upright anywhere the arms reach instead of placing them in the box",
     )
     parser.add_argument(
         "--fixed-start", action="store_true",
         help="start the bricks upright in their old fixed square spots instead of scattering them",
     )
-    parser.add_argument("--drop", action="store_true", help=argparse.SUPPRESS)  # the default now; old commands still work
     parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
@@ -103,13 +106,14 @@ def main() -> None:
     )
     args = parser.parse_args()
     move_check.set_mode(args.confirm_moves)
-    if args.drop and (args.fixed_start or args.upright):
-        parser.error("--drop doesn't go with --fixed-start or --upright")
+    if sum((args.drop, args.upright, args.fixed_start)) > 1:
+        parser.error("pick one of --drop, --upright, --fixed-start")
+    start = "drop" if args.drop else "upright" if args.upright else "place"
     if args.fixed_start:
         scatter_seed = None
     elif args.scatter is not None:
         scatter_seed = args.scatter
-    elif args.random:
+    elif args.random or start != "place":
         scatter_seed = random.randrange(10_000)
     else:
         scatter_seed = random.choice(DEMO_SEEDS)
@@ -123,7 +127,7 @@ def main() -> None:
         knock_placed=PART_NAMES[args.knock_placed] if args.knock_placed else None,
         knock_later=PART_NAMES[args.knock_later] if args.knock_later else None,
         scatter_seed=scatter_seed,
-        drop=not (args.upright or args.fixed_start),
+        start=start,
     )
 
 
