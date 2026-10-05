@@ -193,8 +193,12 @@ command. Seeds 1-30 dropped, with his tree: flippable bricks 48 -> 73 of 77 (pla
 only), full zebras 7 of 28 -> 17 of 30.
 
 A brick no safe plan fits is answered `FAILED` ("no way found to flip it
-(arms not moved)") and stays where it is; his tree retries, then escalates
-it to a human. Planned on a scratch copy first (nothing moves until a whole
+(arms not moved)", `"reason": "NO_FLIP_PLAN"`) and stays where it is; his tree
+retries, then escalates it to a human. Asked again while the brick hasn't
+moved (within 1 cm and 5 deg, lying the same way) the bridge answers at once
+instead of planning again - the planner has no randomness, so it would find
+nothing again (old drop seed 12's head: retries 2-4 took 0.1 s instead of
+~90 s each). Planned on a scratch copy first (nothing moves until a whole
 flip is known to work), in a separate process so the viewer and perception
 keep running. Over 30 dropped bricks (seeds 1-12): **18 can be flipped**
 (on its side 13/17, on its end 1/4, upside down 4/9; over 40 seeds on its

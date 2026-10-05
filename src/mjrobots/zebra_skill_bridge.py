@@ -15,7 +15,9 @@ matching reply arrives on `/zebra/skill_status`:
 `reason` (only on some FAILED replies) is a fixed code his tree acts on, so it
 doesn't have to match words in `message`: "FACING_IMPOSSIBLE" = no grip of
 either arm can place it facing as asked (he escalates at once), "NEEDS_FLIP" =
-it turned over in the fingers (his retry re-checks upright and flips it).
+it turned over in the fingers (his retry re-checks upright and flips it),
+"NO_FLIP_PLAN" = no flip fits where the brick lies (retrying won't help until
+it's moved: asked again for the same spot, the bridge answers at once).
 
 This node is that reply: for all three zebra parts (legs/body/head, ids
 31111p0e/f/g - see bom.json) and both arms, it keeps a MuJoCo viewer running,
@@ -81,13 +83,14 @@ from std_msgs.msg import String
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
 from .pick_place import _RealtimeClock, _ThrottledSync
-from .scatter import (STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks, lying,
+from .scatter import (STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks,
                       place_bricks, scatter_bricks)
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_facing import (
-    FACING_YAW, SHOW_CAMERA, FacingError, can_place, full_yaw_near, held_from_print_in_hand, long_face_view,
+    FACING_YAW, SHOW_CAMERA, FacingError, can_place, full_yaw_near, held_from_print_in_hand,
     pick_facing,
 )
+from .sim_sensing import SimSensing
 from .zebra_flip import MovePlan, PlanningProcess, execute_flip, set_down_kept
 from .zebra_publisher import ALL_PART_IDS, PART_BODIES, PART_LABELS, ZebraPerceptionPublisher
 from .zebra_pick_place import (
@@ -107,31 +110,20 @@ COMMAND_TOPIC = "/zebra/skill_commands"
 STATUS_TOPIC = "/zebra/skill_status"
 # Looks averaged by the look again from hover (see `_relook` in run_bridge).
 _RELOOK_SAMPLES = 10
-# The print-side look (see `_print_look`): the headcam must see this share of a long
-# face unblocked, this tall in its image, to tell printed from blank (assumed - to be
-# checked on the real camera; shown 50-65 cm away a face is 20-30 px tall).
-_PRINT_LOOK_MIN_SHARE = 0.5
-_PRINT_LOOK_MIN_PX = 20.0
 # Perception's FACING says UNKNOWN when the print points within this of sideways (world
 # +-X) - see _known_facing.
 _FACING_SIDEWAYS = np.radians(20.0)
-# Noise of one simulated yaw look (see `_sim_brick_yaw`).
-_YAW_SIGMA = np.radians(2.0)
+# A flip found no way for a brick: asked again with the brick still within this of where it
+# was (and lying the same way), the bridge answers FAILED at once instead of planning again
+# - the planner has no randomness, so it would find nothing again. Each "no way found" took
+# 1-2 min of planning and zebra_bt retries 4 times (old seeds 6 and 12: ~6 min on one brick).
+_SAME_SPOT = 0.01  # m
+_SAME_TURN = np.radians(5.0)
 
 
-def _sim_brick_yaw(data, brick_id: int, rng: np.random.Generator, samples: int) -> float:
-    """Simulated yaw detector: the brick's rotation about vertical from square
-    (radians, in [-pi/2, pi/2) - a brick looks the same turned 180 deg),
-    averaged over `samples` noisy looks. Like SimulatedCameras.observe for
-    position, it reads the true pose and adds noise - a stand-in for
-    estimating the brick's long axis from a camera image. Only called once a
-    camera has actually seen the brick."""
-    R = data.xmat[brick_id].reshape(3, 3)
-    yaw = np.arctan2(R[1, 0], R[0, 0])
-    looks = yaw + rng.normal(0.0, _YAW_SIGMA, samples)
-    # Average on the doubled angle, where yaw and yaw + 180 deg coincide.
-    mean = np.arctan2(np.sin(2 * looks).mean(), np.cos(2 * looks).mean()) / 2
-    return float((mean + np.pi / 2) % np.pi - np.pi / 2)
+class NoFlipPlan(RuntimeError):
+    """No flip of the brick fits where it lies; retrying won't help until it's moved."""
+    reason = "NO_FLIP_PLAN"
 
 
 class ZebraSkillBridge(Node):
@@ -331,6 +323,9 @@ def run_bridge(
     perception = ZebraPerceptionPublisher(
         part_ids=ALL_PART_IDS, interval=0.5, model=model, data=data, use_timer=False
     )
+    # what the cameras would tell about the bricks - answered by the simulation (the module
+    # to replace on the real robot); same noise source as perception, as before
+    sensing = SimSensing(model, data, brick_ids, perception.rng)
     if scattered is not None:
         node.get_logger().info(f"{start} seed {scatter_seed}: {describe(scattered)}")
     executor = rclpy.executors.SingleThreadedExecutor()
@@ -340,6 +335,7 @@ def run_bridge(
     relook_camera: dict[str, str] = {}  # part id -> camera its last look again used
     placed_at: dict[str, np.ndarray] = {}  # part id -> center it was placed (and checked) at
     stack_refusals: dict[str, int] = {pid: 0 for pid in ALL_PART_IDS}
+    no_flip_at: dict[str, tuple] = {}  # part id -> (xy, lies, yaw) where no flip was found
     escalated: set[str] = set()  # parts this bridge escalated (see _MAX_STACK_REFUSALS)
 
     def _stack_problems(skip: str | None = None) -> list[str]:
@@ -360,7 +356,7 @@ def run_bridge(
     def _relook(part_id: str) -> tuple[np.ndarray, float] | None:
         """grasp_part's look again from hover: `part_id`'s `(center, yaw)` -
         center in world frame, averaged over _RELOOK_SAMPLES looks from one
-        camera, and its yaw (`_sim_brick_yaw`) - or None if no camera sees it
+        camera, and its yaw (`SimSensing.brick_yaw`) - or None if no camera sees it
         in at least half its looks.
 
         Cameras are tried headcam first (its frame *is* the shared frame),
@@ -376,24 +372,9 @@ def run_bridge(
                 shared = np.mean([perception.calibration.to_reference(camera, p, cams) for p in looks], axis=0)
                 origin = perception.shared_to_world.apply(shared)
                 relook_camera[part_id] = camera
-                yaw = _sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
+                yaw = sensing.brick_yaw(part_id, _RELOOK_SAMPLES)
                 return origin + np.array([0, 0, _BRICK_CENTER_OFFSET_Z]), yaw
         return None
-
-    def _print_look(part_id: str, camera: str = SHOW_CAMERA):
-        """zebra_facing's `look_print`: which way the printed face points, as `camera` sees
-        the brick (the headcam: held up in front of it; a hand camera: at a flip's
-        handover) - or None if it can't tell. Stand-in for a detector: the true direction
-        plus ~3 deg noise, but only when that camera really has a usable view of a long
-        face (zebra_facing.long_face_view: geometry, fingers and arms blocking included) -
-        seeing either face tells the side."""
-        def look(d):
-            share, px = long_face_view(model, d, camera, brick_ids[part_id])
-            if share < _PRINT_LOOK_MIN_SHARE or px < _PRINT_LOOK_MIN_PX:
-                return None
-            n = -d.xmat[brick_ids[part_id]].reshape(3, 3)[:, 1] + perception.rng.normal(0.0, 0.05, 3)
-            return n / np.linalg.norm(n)  # the print is on the brick's -y face
-        return look
 
     def _stack_target(part_id: str) -> np.ndarray:
         """Where this part will be placed (centre): Victor's stack spot and the part's level
@@ -423,14 +404,14 @@ def run_bridge(
                     return True, f"its print side was seen at the handover: it can go on the stack facing {facing}", None
                 why = f"this grip can't set it down facing {facing} at the stack"
         else:  # square, either way round
-            ctx.held_yaw = _wrap(_sim_brick_yaw(data, brick_ids[part_id], perception.rng, _RELOOK_SAMPLES)
+            ctx.held_yaw = _wrap(sensing.brick_yaw(part_id, _RELOOK_SAMPLES)
                                  - ctx.grip_yaw)
             if any(can_place(ctx, target, yaw) for yaw in (0.0, np.pi)):
                 facing_yaw.pop(part_id, None)
                 return True, "it can go on the stack", None
             why = "this grip can't reach the stack"
-        spot = set_down_kept(ctx, render, clock, _flip_look(part_id),
-                             [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id])
+        spot = set_down_kept(ctx, render, clock, sensing.held_brick_look(part_id),
+                             sensing.other_bricks_xy(part_id))
         held_by.pop(part_id, None)
         return False, why, spot
 
@@ -443,11 +424,10 @@ def run_bridge(
         is the hand's rotation (arm joints) applied to where the print is in the hand
         (held_yaw, from the look) - right however the hand is tilted. On the table (put
         back after the show, or placed): its full yaw, kept up to date with the yaw look
-        (`_sim_brick_yaw`, only known up to 180 deg - the remembered one decides which
+        (`SimSensing.brick_yaw`, only known up to 180 deg - the remembered one decides which
         way round). Not upright any more: unknown. Pointing within _FACING_SIDEWAYS of
         sideways (world +-X) it's unknown too: in the hand the brick can turn up to ~18
         deg, and calling that side FORWARD/BACKWARD was wrong 3 times in 28 (seed 4 head)."""
-        b = brick_ids[part_id]
 
         def side(n):  # the print's direction (world) -> FORWARD / BACKWARD / None
             horizontal = np.hypot(n[0], n[1])
@@ -470,10 +450,10 @@ def run_bridge(
             print_yaw[part_id] = float(np.arctan2(turn[1, 0], turn[0, 0]) + h)
             print_seen_by.pop(part_id)
         if part_id in print_yaw:
-            if lying(data.xmat[b].reshape(3, 3)) != UPRIGHT:
+            if sensing.how_it_lies(part_id) != UPRIGHT:
                 print_yaw.pop(part_id)
                 return None
-            yaw = print_yaw[part_id] = full_yaw_near(_sim_brick_yaw(data, b, perception.rng, 1), print_yaw[part_id])
+            yaw = print_yaw[part_id] = full_yaw_near(sensing.brick_yaw(part_id, 1), print_yaw[part_id])
         else:
             return None
         return side([np.sin(yaw), -np.cos(yaw), 0.0])  # the print is on the brick's -y face
@@ -489,18 +469,6 @@ def run_bridge(
         else:
             print_seen_by.pop(part_id, None)
             print_yaw[part_id] = yaw
-
-    def _flip_look(part_id: str):
-        """execute_flip's `look`: a hand camera looking at the held brick (B's at the
-        handover, A's once B holds it) - here the true pose plus ~2 mm / ~2 deg noise,
-        a stand-in for a real detector, like _sim_brick_yaw."""
-        def look(d):
-            R = d.xmat[brick_ids[part_id]].reshape(3, 3).copy()
-            center = d.xpos[brick_ids[part_id]] + R @ np.array([0, 0, _BRICK_CENTER_OFFSET_Z])
-            th = perception.rng.normal(0.0, _YAW_SIGMA)
-            Rz = np.array([[np.cos(th), -np.sin(th), 0], [np.sin(th), np.cos(th), 0], [0, 0, 1]])
-            return Rz @ R, center + perception.rng.normal(0.0, 0.002, 3)
-        return look
 
     def _plan_flip_live(part_id: str, order: list[str], allow_move: bool = True, prefer=None):
         """plan_flip in the planning process, from the state right now, while the sim,
@@ -617,7 +585,7 @@ def run_bridge(
                     if skill == "pick" and kept:
                         pass  # already in the hand from the flip: nothing to move
                     elif skill == "pick":
-                        lies = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                        lies = sensing.how_it_lies(part_id)
                         if lies != UPRIGHT:
                             raise RuntimeError(
                                 f"{PART_LABELS[part_id]} is {lies} - can't grip it from the top "
@@ -631,11 +599,11 @@ def run_bridge(
                                 ctx, how = pick_facing(
                                     {a: contexts[(a, part_id)] for a in arms}, use, render, clock, center_xyz,
                                     _stack_target(part_id), FACING_YAW[facing], lambda: _relook(part_id),
-                                    _print_look(part_id),
+                                    sensing.print_look(part_id),
                                     # still upright in the hand? (stand-in, like perception's LYING)
-                                    still_upright=lambda d: lying(d.xmat[brick_ids[part_id]].reshape(3, 3)) == UPRIGHT,
-                                    idle=perception.maybe_publish, look_held=_flip_look(part_id),
-                                    other_xy=[data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id],
+                                    still_upright=lambda d: sensing.how_it_lies(part_id, d) == UPRIGHT,
+                                    idle=perception.maybe_publish, look_held=sensing.held_brick_look(part_id),
+                                    other_xy=sensing.other_bricks_xy(part_id),
                                     on_seen=lambda c, y: _print_seen(part_id, c, y))
                             except FacingError as exc:
                                 print_seen_by.pop(part_id, None)  # not held any more
@@ -732,26 +700,37 @@ def run_bridge(
                                 )
                     elif skill == "flip":
                         label = PART_LABELS[part_id]
-                        lies = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                        lies = sensing.how_it_lies(part_id)
                         if lies == UPRIGHT:
                             node.get_logger().info(f"{label} is already upright - nothing to flip")
                         else:
                             if len(arms) < 2:
                                 raise RuntimeError(f"{label} is {lies}: flipping needs both arms (--arm nearest)")
+                            if part_id in no_flip_at:  # no way found last time: has it moved since?
+                                xy0, lies0, yaw0 = no_flip_at.pop(part_id)
+                                turned = abs((sensing.brick_yaw(part_id, _RELOOK_SAMPLES) - yaw0 + np.pi / 2)
+                                             % np.pi - np.pi / 2)
+                                if (lies == lies0 and np.linalg.norm(world_origin[:2] - xy0) <= _SAME_SPOT
+                                        and turned <= _SAME_TURN):
+                                    no_flip_at[part_id] = (xy0, lies0, yaw0)
+                                    raise NoFlipPlan(f"{label} is {lies} - no way found to flip it, and it hasn't "
+                                                     f"moved since the last try (not planned again; arms not moved)")
                             go_home(ctx, render, clock)  # the other arm is parked above
                             order = [use, next(a for a in arms if a != use)]
                             node.get_logger().info(f"{label} is {lies}: planning a flip ...")
                             t0 = data.time  # sim time runs in real time on the viewer, planning included
                             plan, lies = _plan_flip_live(part_id, order)
                             if plan is None:
-                                raise RuntimeError(f"{label} is {lies} - no way found to flip it (arms not moved)")
+                                no_flip_at[part_id] = (world_origin[:2].copy(), lies,
+                                                       sensing.brick_yaw(part_id, _RELOOK_SAMPLES))
+                                raise NoFlipPlan(f"{label} is {lies} - no way found to flip it (arms not moved)")
                             node.get_logger().info(f"flip plan ({data.time - t0:.1f} s): {plan.describe()}")
                             # where the other bricks are (sim positions, like the planner's)
-                            others_xy = [data.xpos[brick_ids[p]][:2].copy() for p in ALL_PART_IDS if p != part_id]
+                            others_xy = sensing.other_bricks_xy(part_id)
                             if isinstance(plan, MovePlan):  # no flip where it lies: move it, then plan again
                                 try:
                                     execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render, clock,
-                                                 _flip_look(part_id), others_xy)
+                                                 sensing.held_brick_look(part_id), others_xy)
                                 except Exception:
                                     _let_go_and_park(part_id)
                                     raise
@@ -762,21 +741,23 @@ def run_bridge(
                                 t1 = data.time
                                 plan, lies = _plan_flip_live(part_id, order, allow_move=False, prefer=plan.then)
                                 if plan is None:
-                                    raise RuntimeError(f"{label} is {lies} - moved it, but found no way to flip it there "
-                                                       f"(arms not moved)")
+                                    no_flip_at[part_id] = (sensing.brick_xy(part_id), lies,
+                                                           sensing.brick_yaw(part_id, _RELOOK_SAMPLES))
+                                    raise NoFlipPlan(f"{label} is {lies} - moved it, but found no way to flip it "
+                                                     f"there (arms not moved)")
                                 node.get_logger().info(f"moved {label}; flip plan from there ({data.time - t1:.1f} s): "
                                                        f"{plan.describe()}")
                             try:
                                 holder = execute_flip(plan, {a: contexts[(a, part_id)] for a in arms}, render,
-                                                      clock, _flip_look(part_id), others_xy, keep=True,
-                                                      look_print=lambda d, cam: _print_look(part_id, cam)(d))
+                                                      clock, sensing.held_brick_look(part_id), others_xy, keep=True,
+                                                      look_print=lambda d, cam: sensing.print_look(part_id, cam)(d))
                             except Exception:
                                 _let_go_and_park(part_id)
                                 raise
                             if holder is not None:  # kept, upright, for the place (zebra_flip.keeps_holding)
-                                now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                                now = sensing.how_it_lies(part_id)
                                 if now != UPRIGHT:
-                                    set_down_kept(holder, render, clock, _flip_look(part_id), others_xy)
+                                    set_down_kept(holder, render, clock, sensing.held_brick_look(part_id), others_xy)
                                     raise RuntimeError(f"flip of {label} ended {now} in the {holder.arm} hand - set it down")
                                 held_by[part_id] = holder.arm
                                 perception.status_override[part_id] = "PICKED"
@@ -787,7 +768,7 @@ def run_bridge(
                                     sim_step.step(model, data)
                                     clock.tick()
                                     render.step()
-                                now = lying(data.xmat[brick_ids[part_id]].reshape(3, 3))
+                                now = sensing.how_it_lies(part_id)
                                 if now != UPRIGHT:
                                     raise RuntimeError(f"flip of {label} ended {now}, not upright")
                                 node.get_logger().info(
