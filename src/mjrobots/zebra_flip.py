@@ -55,9 +55,10 @@ import numpy as np
 
 from . import cartesian_control
 from . import zebra_pick_place as zpp
+from .arm_clearance import ClearanceError
 from .cartesian_control import HAND_LOCAL_OFFSET, IKError, move_to_pose, solve_ik_pose
 from .scatter import (
-    MIN_BRICK_GAP, ON_END, ON_SIDE, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, Zone, lying,
+    MIN_BRICK_GAP, ON_END, ON_SIDE, PLACE_BOX, STACK_XY, TABLE_Z, UPRIGHT, UPSIDE_DOWN, Zone, lying,
 )
 from .stationlite_pick_place import _GRIP_OPEN, _hold
 from .zebra_pick_place import (
@@ -860,6 +861,11 @@ def _set_down_seen(ctx: ZebraArmContext, render, clock, set_down, quat, look) ->
                  hover, quat, path_check=ctx._check_clearance)
 
 
+def _in_box(xyz) -> bool:
+    (x0, x1), (y0, y1) = PLACE_BOX
+    return x0 <= xyz[0] <= x1 and y0 <= xyz[1] <= y1
+
+
 def _spots_around(center, z, other_xy) -> list[np.ndarray]:
     """free_spots around `center` (near ones, then the far ones), at centre height `z`."""
     zone = Zone.load("either")
@@ -908,6 +914,37 @@ def _turn_about_vertical(R_seen, R_planned) -> float:
     return turn
 
 
+_AWAY_STEPS = (0.05, 0.08)  # m: how far B carries the brick away from the stack to turn it there
+
+
+def _turn_away_from_stack(B: ZebraArmContext, render, clock, R_final, refused: ClearanceError) -> None:
+    """B's turn at the handover spot was refused (too close to a brick): carry the brick
+    straight away from the stack (same hand orientation) and turn it there. The plan's turn
+    cleared everything by >= _MIN_OBSTACLE, but B re-aims its grip at where the brick really
+    is (~1 cm off the plan) and next to the stack the turn then came 0.5-0.7 cm from the
+    stacked body (demo 5's head, two runs) - refused, and the flip failed. Refused moves
+    don't move the arm, so each try starts from where B is. Raises `refused` if no step works."""
+    model, data = B.model, B.data
+    R_hand = data.xmat[B.body_id].reshape(3, 3)
+    here = data.xpos[B.body_id] + R_hand @ HAND_LOCAL_OFFSET
+    away = here[:2] - STACK_XY
+    away /= max(np.linalg.norm(away), 1e-9)
+    for d in _AWAY_STEPS:
+        target = here + np.append(d * away, 0.0)
+        try:
+            move_to_pose(model, data, render, clock, B.arm_ctrl, B.body_id, HAND_LOCAL_OFFSET, B.joint_ids,
+                         target, _quat(R_hand), lead_in_step=_HELD_JOINT_STEP, path_check=B._check_clearance)
+            q = solve_ik_pose(model, data, B.body_id, HAND_LOCAL_OFFSET, B.joint_ids, target, _quat(R_final),
+                              q_init=data.qpos[model.jnt_qposadr[B.joint_ids]].copy(), iters=800)
+            what = f"{B.arm} arm turns the brick upright, {d * 100:.0f} cm away from the stack"
+            _joint_move(B, render, clock, q, what)
+            print(f"[mjrobots] {what} (the turn at the handover spot was refused: {refused})", flush=True)
+            return
+        except IKError:
+            continue
+    raise refused
+
+
 def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy) -> str:
     """After a flip failed halfway: if a hand still holds the brick, lower it onto a free
     table spot (free_spots: in the green zone, clear of the stack and the other bricks)
@@ -934,9 +971,12 @@ def _put_down_after_failure(plan, contexts: dict, render, clock, look, other_xy)
     quat = data.xquat[c.body_id].copy()  # keep the hand as it is: the brick stays the way it lies
     R_seen, _ = look(data)
     height = float(np.abs(R_seen[2]) @ size)  # centre height above the table, lying as it is
+    # spots in the work box first (scatter.PLACE_BOX: where a brick can be flipped where it
+    # lies), so the retry can flip it there - set down outside it (demo 5's head at (0.47,
+    # +0.15)) every retry answered "no way found" and the head was escalated
+    spots = sorted(_spots_around(plan.center, TABLE_TOP + height, other_xy), key=lambda s: not _in_box(s))
     try:
-        spot = _set_down_somewhere(c, render, clock, _spots_around(plan.center, TABLE_TOP + height, other_xy),
-                                   quat, look)
+        spot = _set_down_somewhere(c, render, clock, spots, quat, look)
         return f"the {c.arm} arm set the brick down on the table at ({spot[0]:.2f}, {spot[1]:+.2f})"
     except IKError:
         pass
@@ -970,6 +1010,8 @@ def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look,
     is kept as `B.print_in_hand` (None if it couldn't tell).
     Raises RuntimeError if a step fails (fingers miss, a move is refused) - after putting
     a still-held brick down on the table (`_put_down_after_failure`)."""
+    for c in contexts.values():  # the held brick, too, keeps off the other bricks (the stack)
+        c.held_vs_bricks = True
     try:
         return _execute_flip(plan, contexts, render, clock, look, other_xy, keep and keeps_holding(plan),
                              look_print)
@@ -979,6 +1021,9 @@ def execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look,
         except Exception as again:
             what = f"putting it down failed too: {again}"
         raise RuntimeError(f"{exc} ({what})") from exc
+    finally:
+        for c in contexts.values():
+            c.held_vs_bricks = False
 
 
 def set_down_kept(ctx: ZebraArmContext, render, clock, look, other_xy) -> np.ndarray:
@@ -1066,7 +1111,10 @@ def _execute_flip(plan: FlipPlan | SoloPlan, contexts: dict, render, clock, look
                                  _quat(Rc @ _mat(plan.b_quat_final)), q_init=plan.q_b_final, iters=800)
         except IKError:
             pass
-        _joint_move(B, render, clock, turn, f"{B.arm} arm turns the brick upright")
+        try:
+            _joint_move(B, render, clock, turn, f"{B.arm} arm turns the brick upright")
+        except ClearanceError as refused:
+            _turn_away_from_stack(B, render, clock, Rc @ _mat(plan.b_quat_final), refused)
     else:
         q_h = solve_ik_pose(model, data, B.body_id, HAND_LOCAL_OFFSET, B.joint_ids, spot_hover,
                             _yawed(B.grip_quat, plan.grip_b), q_init=data.qpos[model.jnt_qposadr[B.joint_ids]].copy(),

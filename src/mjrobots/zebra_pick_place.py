@@ -120,6 +120,9 @@ class ZebraArmContext:
         others = [b for b in range(model.nbody) if b != self.brick_id
                   and (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or "").startswith("zebra_")]
         self.clearance = ArmClearance(model, arm, others)
+        # Also keep the HELD brick that far from the other bricks (zebra_flip turns it on
+        # while flipping; a place has to set it down on the brick below)
+        self.held_vs_bricks = False
         # How far the last placed brick was seen from its target: (xy, z, yaw)
         # in m/m/rad, or None if there was no check or nothing saw it.
         self.place_error: tuple[float, float, float] | None = None
@@ -160,7 +163,7 @@ class ZebraArmContext:
         arm_clearance.py) - with the held brick carried along, if any."""
         self.clearance.check(
             self.data, self.joint_ids, path, self.body_id,
-            self.brick_id if self.holding else None, what,
+            self.brick_id if self.holding else None, what, self.held_vs_bricks,
         )
 
     def go(self, render, clock, target):

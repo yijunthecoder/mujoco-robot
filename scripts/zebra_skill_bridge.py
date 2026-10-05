@@ -6,7 +6,8 @@ Requires ROS2 sourced first:
     source /opt/ros/humble/setup.bash
 
 Usage:
-    python scripts/zebra_skill_bridge.py
+    python scripts/zebra_skill_bridge.py                  # one of demos 1-5, at random
+    python scripts/zebra_skill_bridge.py --demo 3         # demo 3
     python scripts/zebra_skill_bridge.py --arm left --gl osmesa
     python scripts/zebra_skill_bridge.py --scatter 4      # replay start seed 4
     python scripts/zebra_skill_bridge.py --random         # a new random start instead of a demo seed
@@ -34,11 +35,12 @@ from mjrobots.zebra_skill_bridge import run_bridge
 
 PART_NAMES = {"legs": "31111p0e", "body": "31111p0f", "head": "31111p0g"}
 
-# Demo convenience only: placed starts (the default, scatter.place_bricks) checked to build
-# a full zebra with zebra_bt - between them every way a brick can lie, and the two-hand
-# flip of an upside-down brick. A run picks one of these unless --scatter, --random,
-# --drop or --upright says otherwise. The robot code itself knows nothing about seeds.
-DEMO_SEEDS = (3, 4, 6, 15, 23)
+# Demo convenience only: demos 1-5 are these placed starts (the default, scatter.place_bricks)
+# - each checked to build a full zebra with zebra_bt; between them every way a brick can lie,
+# and the two-hand flip of an upside-down brick. Kept fixed from 2026-10-05: demo N is always
+# DEMO_SEEDS[N - 1]. A run picks one at random unless --demo, --scatter, --random, --drop or
+# --upright says otherwise. The robot code itself knows nothing about seeds.
+DEMO_SEEDS = (32, 4, 6, 15, 23)
 
 
 def main() -> None:
@@ -77,10 +79,15 @@ def main() -> None:
              "so the stack check before the next place finds it gone",
     )
     parser.add_argument(
+        "--demo", type=int, choices=range(1, len(DEMO_SEEDS) + 1), default=None, metavar="N",
+        help="run demo N (1-%d): a placed start checked to build a full zebra - one of them at "
+             "random unless this or --scatter/--random/--drop/--upright is given" % len(DEMO_SEEDS),
+    )
+    parser.add_argument(
         "--scatter", type=int, default=None, metavar="SEED",
-        help="replay this start: by default the bricks are set down inside the box where they can "
-             "be flipped where they lie, any way up (scatter.place_bricks) - one of the demo seeds "
-             "%s unless given (it's printed); same SEED, same start" % (DEMO_SEEDS,),
+        help="replay start SEED instead of a demo: by default the bricks are set down inside the box "
+             "where they can be flipped where they lie, any way up (scatter.place_bricks); the seed "
+             "is printed; same SEED, same start",
     )
     parser.add_argument(
         "--random", action="store_true",
@@ -109,6 +116,9 @@ def main() -> None:
     if sum((args.drop, args.upright, args.fixed_start)) > 1:
         parser.error("pick one of --drop, --upright, --fixed-start")
     start = "drop" if args.drop else "upright" if args.upright else "place"
+    if args.demo is not None and (args.scatter is not None or args.random or start != "place" or args.fixed_start):
+        parser.error("--demo is a placed start: it doesn't go with --scatter, --random, --drop, "
+                     "--upright or --fixed-start")
     if args.fixed_start:
         scatter_seed = None
     elif args.scatter is not None:
@@ -116,7 +126,9 @@ def main() -> None:
     elif args.random or start != "place":
         scatter_seed = random.randrange(10_000)
     else:
-        scatter_seed = random.choice(DEMO_SEEDS)
+        demo = args.demo or random.randint(1, len(DEMO_SEEDS))
+        scatter_seed = DEMO_SEEDS[demo - 1]
+        print(f"demo {demo} (place seed {scatter_seed})", flush=True)
 
     run_bridge(
         prefer_gl=args.gl, scene_path=args.scene, arm=args.arm,

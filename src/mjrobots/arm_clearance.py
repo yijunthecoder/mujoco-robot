@@ -61,11 +61,12 @@ class ArmClearance:
         self.obstacles = [g for g in range(model.ngeom)
                           if model.geom_bodyid[g] in set(obstacles) and model.geom_contype[g]]
 
-    def closest_obstacle(self, data) -> float:
-        """Current closest distance between this arm and the obstacle bricks, capped at 1 m."""
+    def closest_obstacle(self, data, extra: list[int] = ()) -> float:
+        """Current closest distance between this arm (plus `extra` geoms) and the obstacle
+        bricks, capped at 1 m."""
         fromto = np.zeros(6)
         best = 1.0
-        for g1 in self.moving:
+        for g1 in (*self.moving, *extra):
             for g2 in self.obstacles:
                 best = min(best, mujoco.mj_geomDistance(self.model, data, g1, g2, best, fromto))
         return best
@@ -80,12 +81,17 @@ class ArmClearance:
                 best = min(best, mujoco.mj_geomDistance(self.model, data, g1, g2, best, fromto))
         return best
 
-    def check(self, data, joint_ids, path, gripper_body: int, held_body: int | None, what: str) -> None:
+    def check(self, data, joint_ids, path, gripper_body: int, held_body: int | None, what: str,
+              held_vs_bricks: bool = False) -> None:
         """Raise ClearanceError if any waypoint of `path` (joint angles for
         `joint_ids`) comes closer than MIN_ARM_CLEARANCE. `held_body`, if
         given, is a free-jointed brick in the gripper: it's carried along at
-        its current pose relative to `gripper_body`. Works on a scratch copy
-        of qpos - the real state is restored before returning."""
+        its current pose relative to `gripper_body`. With `held_vs_bricks` the
+        held brick, too, must keep MIN_BRICK_CLEARANCE from the obstacle bricks -
+        not when placing (it ends on the brick below), but while flipping: the
+        held head rubbed against the stacked body during its flip and turned it
+        12 deg or knocked it off (demo 1, 4 of 4 runs touched). Works on a
+        scratch copy of qpos - the real state is restored before returning."""
         model = self.model
         qpos_adr = model.jnt_qposadr[joint_ids]
         held_geoms: list[int] = []
@@ -103,8 +109,9 @@ class ArmClearance:
         # stack) may move away from it - only not come any closer (2 mm slack for the
         # path's first steps): blocking it left the arm stuck there (seed 6: "-0.5 cm")
         brick_min = MIN_BRICK_CLEARANCE
+        near = held_geoms if held_vs_bricks else []  # also kept off the bricks: the held brick
         if self.obstacles:
-            brick_min = min(MIN_BRICK_CLEARANCE, self.closest_obstacle(data) - 0.002)
+            brick_min = min(MIN_BRICK_CLEARANCE, self.closest_obstacle(data, near) - 0.002)
         qpos_save = data.qpos.copy()
         try:
             for i, q in enumerate(path):
@@ -124,7 +131,7 @@ class ArmClearance:
                         f"{i + 1}/{len(path)} (minimum {MIN_ARM_CLEARANCE * 100:.0f} cm) - arm not moved"
                     )
                 if self.obstacles:
-                    gap = self.closest_obstacle(data)
+                    gap = self.closest_obstacle(data, near)
                     if gap < brick_min:
                         raise ClearanceError(
                             f"{what}: would pass {gap * 100:.1f} cm from another brick at waypoint "

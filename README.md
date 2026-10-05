@@ -64,11 +64,21 @@ rolled wrist can't reach. On the real table this is a box taped on it, the
 bricks put inside it diagonally. Inside the box a flip is planned in ~2-7 s
 and never needs "move it first".
 
-By default a run picks one of the **demo seeds 3, 4, 6, 15, 23** (`DEMO_SEEDS` in
-`scripts/zebra_skill_bridge.py`): starts checked to build a full zebra, which
-between them show every way a brick can lie and the two-hand flip of an
-upside-down brick. This is a demo convenience only - the robot code knows
+By default a run picks one of **demos 1-5** at random, or `--demo N` runs
+that one: placed starts (seeds 32, 4, 6, 15, 23 - `DEMO_SEEDS` in
+`scripts/zebra_skill_bridge.py`, fixed from 2026-10-05) checked to build a full
+zebra, which between them show every way a brick can lie and the two-hand flip
+of an upside-down brick. This is a demo convenience only - the robot code knows
 nothing about seeds - and they are the quick regression check after a change.
+
+| demo | seed | legs | body | head |
+|---|---|---|---|---|
+| 1 | 32 | upside down (two hands) | upright | on its end (one hand) |
+| 2 | 4 | on its side (one hand) | on its end (two hands) | upright |
+| 3 | 6 | upside down (two hands) | on its end (one hand) | on its side (two hands) |
+| 4 | 15 | on its side (one hand) | upright | upside down (two hands) |
+| 5 | 23 | upright | on its end (one hand) | upside down (two hands) |
+
 `--random` gives a new random start. The first bridge line says which seed, e.g.
 `place seed 4: legs (0.45, -0.10) 83 deg ON_SIDE, body (0.47, +0.08) 7 deg ON_END, ...`.
 Replay a start by its seed, drop the bricks anywhere in reach instead (see
@@ -76,6 +86,7 @@ Replay a start by its seed, drop the bricks anywhere in reach instead (see
 the old fixed square spots:
 
 ```bash
+$ bash scripts/run_zebra.sh --demo 3
 $ bash scripts/run_zebra.sh --scatter 7
 $ bash scripts/run_zebra.sh --random
 $ bash scripts/run_zebra.sh --drop
@@ -683,7 +694,26 @@ open both hands, dropping the brick 11-15 cm, once 4 cm from the stack. Now a
 hand that still holds it (the fingers stopped at one of the brick's widths)
 first lowers it onto a free spot - the same rules as a set-down - then lets go:
 seeds 9 body and 2 legs ended 14 and 22 cm from the stack, put down, not
-dropped (`_put_down_after_failure`).
+dropped (`_put_down_after_failure`). Spots inside the work box
+(`scatter.PLACE_BOX`) come first, so the retry can flip it where it lies.
+
+**A turn refused next to the stack** (2026-10-05): B re-aims at where the
+brick really is (~1 cm off the plan), and next to the stack its last turn
+then came 0.5-0.7 cm from the stacked body - refused, the flip failed and
+the brick was escalated (place seed 23's head, two runs). Now B carries the
+brick 5 (or 8) cm straight away from the stack and turns it there
+(`_turn_away_from_stack`; the bridge log says "turns the brick upright, 5 cm
+away from the stack"): 5 of 5 runs full zebras. While flipping, every
+executed move also keeps the *held* brick 1 cm from the other bricks
+(`ArmClearance.check(held_vs_bricks=True)`), not just the arm.
+
+**Known issue - a handover right beside the stack:** when the first hand lets
+go, the brick sags ~1 cm in the second hand's fingers; handed over right
+beside the finished stack (place seed 3's head) it rubbed against the stacked
+body and turned it up to 12 deg or knocked it off - 2 of 3 runs. Planning
+with 3 cm for the held brick (instead of 1.2) made other flips fail and
+planning slow, and was dropped. To try: once a brick is on the stack, skip
+the handover spots right next to it. Seed 3 was taken out of the demos.
 
 **Still open:** upside-down coverage (8/26 get a plan); an on-end brick with
 no plan now takes longer to say so (the far one-hand search: up to ~39 s with
