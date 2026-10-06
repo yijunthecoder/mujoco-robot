@@ -9,6 +9,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from PIL import Image as PILImage
 from google import genai
+from google.genai import types
 from apikeys import GOOGLE_API_KEY
 
 
@@ -116,13 +117,15 @@ quotes, or a trailing period.
         for attempt in range(1, 4):
             try:
                 response = self.client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemma-4-26b-a4b-it",
                     contents=[pil_image, prompt],
-                    config={
-                        "max_output_tokens": 300,
-                        "temperature": 0,
-                        "thinking_config": {"thinking_budget": 0},
-                    },
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=300,
+                        temperature=0,
+                        thinking_config=types.ThinkingConfig(
+                            thinking_level="minimal",
+                        ),
+                    ),
                 )
                 raw = (response.text or "").strip()
                 decision = _sanitize_decision(raw, part_id)
@@ -130,17 +133,17 @@ quotes, or a trailing period.
                     break
                 last_err = f"invalid answer: {raw!r}"
                 self.get_logger().warn(
-                    f"Gemini answer failed validation "
+                    f"Gemma answer failed validation "
                     f"(attempt {attempt}/3): {raw!r}")
             except Exception as e:
                 last_err = str(e)
                 self.get_logger().warn(
-                    f"Gemini call failed (attempt {attempt}/3): {e}")
+                    f"Gemma call failed (attempt {attempt}/3): {e}")
             time.sleep(1.0)
 
         if decision is None:
             self.get_logger().error(
-                f"Gemini failed for {request_id}: {last_err}")
+                f"Gemma failed for {request_id}: {last_err}")
             # No reply — VLADecide's wait_ticks_ timeout will fire and
             # the tree will retry with a new request_id.
             return
