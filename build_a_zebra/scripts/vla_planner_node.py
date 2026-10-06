@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 import rclpy
@@ -11,6 +12,44 @@ from google import genai
 from apikeys import GOOGLE_API_KEY
 
 
+def _sanitize_decision(raw, part_id):
+    """Return 'DONE' or '<SKILL> <part_id>' if raw is a valid answer,
+    else None.
+
+    Tolerates: first-line-only, markdown code fences / backticks,
+    surrounding quotes, trailing sentence punctuation, mixed case
+    in the skill word. The part id must match part_id exactly.
+    """
+    if not raw:
+        return None
+
+    line = ""
+    for candidate in raw.splitlines():
+        candidate = candidate.strip()
+        if candidate:
+            line = candidate
+            break
+    if not line:
+        return None
+
+    # Strip markdown / quoting noise anywhere on the line.
+    line = line.replace("`", "").strip()
+    line = re.sub(r"\s+", " ", line)
+    line = line.rstrip(" .,;:!?\"'")
+
+    tokens = line.split(" ")
+    if len(tokens) == 1:
+        return "DONE" if tokens[0].upper() == "DONE" else None
+
+    if len(tokens) == 2:
+        skill = tokens[0].upper()
+        part = tokens[1]
+        if skill in ("PICK", "PLACE", "FLIP") and part == part_id:
+            return f"{skill} {part_id}"
+
+    return None
+
+
 class VLAPlanner(Node):
     def __init__(self):
         super().__init__("vla_planner")
@@ -19,16 +58,11 @@ class VLAPlanner(Node):
         self.bridge = CvBridge()
         self.latest_image = None
 
-        # Camera: keep the newest frame only.
         self.create_subscription(Image, "/camera/image_raw", self.on_image, 10)
-
-        # One request -> one decision. VLADecide publishes JSON here.
         self.create_subscription(String, "/vla/request", self.on_request, 10)
-
         self.decision_pub = self.create_publisher(String, "/vla/decision", 10)
 
-        self.get_logger().info(
-            "VLAPlanner ready — waiting for /vla/request")
+        self.get_logger().info("VLAPlanner ready — waiting for /vla/request")
 
     # ------------------------------------------------------------------
     # Subscriber callbacks
@@ -41,8 +75,6 @@ class VLAPlanner(Node):
 
     def on_request(self, msg):
         if self.latest_image is None:
-            # Don't answer with a guess; VLADecide will retry with a
-            # fresh request_id, so we just drop this one.
             self.get_logger().warn(
                 "request received before first camera frame — dropping")
             return
@@ -50,10 +82,10 @@ class VLAPlanner(Node):
         try:
             req = json.loads(msg.data)
             request_id = req["request_id"]
-            part_id    = req["part_id"]
-            status     = req.get("status", "UNKNOWN")
+            part_id = req["part_id"]
+            status = req.get("status", "UNKNOWN")
             orientation = req.get("orientation", "UNKNOWN")
-            facing     = req.get("facing", "UNKNOWN")
+            facing = req.get("facing", "UNKNOWN")
         except Exception as e:
             self.get_logger().error(f"bad request JSON: {e}")
             return
@@ -73,7 +105,8 @@ Rules, in order — use the FIRST one that matches:
 3. If status is PICKED, answer: PLACE {part_id}
 4. Otherwise, answer: PICK {part_id}
 
-Answer with exactly one line, nothing else.
+Answer with exactly one line, nothing else. Do not use backticks,
+quotes, or a trailing period.
 """
 
         pil_image = PILImage.fromarray(self.latest_image)
@@ -91,16 +124,19 @@ Answer with exactly one line, nothing else.
                         "thinking_config": {"thinking_budget": 0},
                     },
                 )
-                text = (response.text or "").strip()
-                if text:
-                    decision = text.splitlines()[0].strip()
+                raw = (response.text or "").strip()
+                decision = _sanitize_decision(raw, part_id)
+                if decision is not None:
                     break
-                last_err = "empty response"
+                last_err = f"invalid answer: {raw!r}"
+                self.get_logger().warn(
+                    f"Gemini answer failed validation "
+                    f"(attempt {attempt}/3): {raw!r}")
             except Exception as e:
                 last_err = str(e)
                 self.get_logger().warn(
                     f"Gemini call failed (attempt {attempt}/3): {e}")
-                time.sleep(1.0)
+            time.sleep(1.0)
 
         if decision is None:
             self.get_logger().error(
@@ -115,7 +151,7 @@ Answer with exactly one line, nothing else.
         out = String()
         out.data = json.dumps({
             "request_id": request_id,
-            "decision":   decision,
+            "decision": decision,
         })
         self.decision_pub.publish(out)
 
