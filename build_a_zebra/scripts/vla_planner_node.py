@@ -12,7 +12,7 @@ class VLAPlanner(Node):
     def __init__(self):
         super().__init__("vla_planner")
 
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])#print("Available models:")
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         self.bridge = CvBridge()
         self.latest_image = None
         self.latest_perception = {}
