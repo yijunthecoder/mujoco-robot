@@ -3,8 +3,7 @@ from PIL import Image
 from google import genai
 from apikeys import GOOGLE_API_KEY
 
-
-client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])#print("Available models:")
+client = genai.Client(api_key=GOOGLE_API_KEY)
 #print("Available models:")
 #for m in client.models.list():
 #    print(" -", m.name)

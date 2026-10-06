@@ -157,7 +157,13 @@ namespace zebra_bt
   {
     lock_guard<mutex> lock(mutex_);
     _demote_stale_locked();
-    return parts_.at(part_name);
+    auto it = parts_.find(part_name);
+    if (it == parts_.end()) {
+      PartState unknown;
+      unknown.name = part_name;
+      return unknown;   // status defaults to UNKNOWN
+    }
+    return it->second;
   }
 
   void WorldModel::setPartStatus(const string & part_name, PartStatus status)
@@ -201,7 +207,7 @@ namespace zebra_bt
     parts_.at(part_name).last_update = std::chrono::steady_clock::now();
   }
 
-    void WorldModel::setFacing(const string & part_name, Facing f)
+  void WorldModel::setFacing(const string & part_name, Facing f)
   {
     lock_guard<mutex> lock(mutex_);
     parts_.at(part_name).facing = f;

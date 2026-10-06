@@ -35,7 +35,7 @@
         </Fallback>
 
         <RecoveryPolicy part="{part}">
-          <VLADecide/>
+          <VLADecide part="{part}"/>
         </RecoveryPolicy>
 
         <IsPartPlaced part="{part}"/>
@@ -79,7 +79,9 @@
     <Action ID="FlipPart">
       <input_port name="part"/>
     </Action>
-    <Action ID="VLADecide"/>
+    <Action ID="VLADecide">
+      <input_port name="part"/>
+    </Action>
     <Decorator ID="RecoveryPolicy">
       <input_port name="part"/>
     </Decorator>

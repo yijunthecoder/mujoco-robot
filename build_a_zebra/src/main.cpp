@@ -692,7 +692,8 @@ namespace zebra_bt
         });
     }
 
-    static BT::PortsList providedPorts() { return {}; }
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
 
     BT::NodeStatus onStart() override
     {
@@ -712,7 +713,8 @@ namespace zebra_bt
       if (state_ == WAITING_FOR_DECISION) {
         if (latest_decision_.empty()) {
           if (++wait_ticks_ > 120) {
-            RCLCPP_WARN(node_->get_logger(), "[VLADecide] timeout waiting for decision");
+            RCLCPP_WARN(node_->get_logger(),
+                        "[VLADecide] timeout waiting for decision");
             return BT::NodeStatus::FAILURE;
           }
           return BT::NodeStatus::RUNNING;
@@ -727,12 +729,30 @@ namespace zebra_bt
           return BT::NodeStatus::SUCCESS;
         }
 
-        const auto st = wm_->getPartState(part);
+        std::string expected_part;
+        getInput("part", expected_part);
+
+        if (part != expected_part) {
+          RCLCPP_WARN(node_->get_logger(),
+                      "[VLADecide] Gemini said '%s' but tree is on '%s' — ignoring",
+                      part.c_str(), expected_part.c_str());
+          latest_decision_.clear();
+          return BT::NodeStatus::RUNNING;
+        }
+
         std::transform(skill.begin(), skill.end(), skill.begin(), ::tolower);
 
         current_skill_ = skill;
         current_part_  = part;
-        command_id_    = bridge_->send(skill, part, st.position);
+
+        geometry_msgs::msg::Point target;
+        if (skill == "place") {
+          target = placeTargetFor(part);
+        } else {
+          target = wm_->getPartState(part).position;
+        }
+
+        command_id_ = bridge_->send(skill, part, target);
 
         RCLCPP_INFO(node_->get_logger(), "[VLADecide] sent %s for %s [%s]",
                     skill.c_str(), part.c_str(), command_id_.c_str());

@@ -12,7 +12,7 @@ class VLAPlanner(Node):
     def __init__(self):
         super().__init__("vla_planner")
 
-        self.client = genai.Client(api_key=...)
+        self.client = genai.Client(api_key=GOOGLE_API_KEY)
         self.bridge = CvBridge()
         self.latest_image = None
         self.latest_perception = {}
@@ -48,11 +48,34 @@ class VLAPlanner(Node):
             state_lines.append(f"- {pid}: {status}")
 
         prompt = f"""
-You must ONLY use the exact part IDs listed below.
-... (full prompt with the 10 valid answers)
-Current state:
-{chr(10).join(state_lines)}
-"""
+        You must ONLY use the exact part IDs listed below.
+        You must NOT invent, modify, or abbreviate any ID.
+        If you invent an ID, the answer is WRONG.
+
+        Allowed part IDs (copy exactly):
+        - 31111p0e
+        - 31111p0f
+        - 31111p0g
+
+        Available skills: PICK, PLACE, FLIP.
+
+        Current state of the table:
+        {state_lines}
+
+        Look at the image. Answer with EXACTLY one of these forms:
+        PICK 31111p0e
+        PICK 31111p0f
+        PICK 31111p0g
+        PLACE 31111p0e
+        PLACE 31111p0f
+        PLACE 31111p0g
+        FLIP 31111p0e
+        FLIP 31111p0f
+        FLIP 31111p0g
+        DONE
+
+        Any other answer is wrong.
+        """
 
         pil_image = PILImage.fromarray(self.latest_image)
 
