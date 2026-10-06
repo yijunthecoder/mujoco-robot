@@ -17,10 +17,14 @@ Saved per decision (logs/learned_policy/demos.npz):
   act    (N, 6)  joint change the IK teacher chose (commanded angles - current angles)
   episode (N,)   which episode the row came from (so train.py can hold some out)
 Episodes where IK can't reach the target are skipped and counted.
+With --camera, also (logs/learned_policy/demos_vision.npz):
+  image  (N, 84, 84, 3)  what the head camera saw at that decision (HeadCamera) - the
+                          vision policy is trained on this + the joints, not the target
 
 usage (repo folder):
   python learned_policy/record_demos.py                  # 300 episodes, seeds 0..299
   python learned_policy/record_demos.py --episodes 1     # quick check on seed 0
+  python learned_policy/record_demos.py --camera         # + head-camera pictures (~25 min)
 """
 
 from __future__ import annotations
@@ -55,6 +59,7 @@ MAX_DECISIONS = 300  # 6 s per episode, then give up
 REACHED = 0.01  # m: hand this close to the true target...
 STILL = 0.02  # m/s: ...and moving slower than this = reached
 START_JIGGLE = 0.15  # rad, each joint's start offset from home, at most
+IMAGE_SIZE = 84  # px, square: the brick is ~3-4 px across, the arm and table plain to see
 SENSE_SIGMA = 0.001  # m, noise of a camera's brick-position look (see sense_brick_top)
 OUT = ROOT / "logs" / "learned_policy"
 
@@ -120,6 +125,23 @@ def sense_brick_top(arm: Arm, rng: np.random.Generator) -> np.ndarray:
     return arm.data.xpos[arm.brick] + rng.normal(0.0, SENSE_SIGMA, 3)
 
 
+class HeadCamera:
+    """The fixed camera above the table ("headcam", the real robot's head camera) - the
+    vision policy's sensor stand-in. Sim: rendered from the scene, IMAGE_SIZE square,
+    without shadows (they cost 4x the render time - 214 vs 50 ms a frame on this laptop -
+    and the arms' shadows are clutter, not the brick). Real robot: the camera's frame,
+    resized the same."""
+
+    def __init__(self, arm: Arm):
+        self.arm = arm
+        self.renderer = mujoco.Renderer(arm.model, IMAGE_SIZE, IMAGE_SIZE)
+        self.renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
+
+    def __call__(self) -> np.ndarray:
+        self.renderer.update_scene(self.arm.data, "headcam")
+        return self.renderer.render().copy()
+
+
 def observation(target: np.ndarray, joints: np.ndarray) -> np.ndarray:
     """What the policy is given: the sensed hover target and the arm's joint angles."""
     return np.concatenate([target, joints]).astype(np.float32)
@@ -134,17 +156,20 @@ def ik_teacher(arm: Arm, target: np.ndarray) -> np.ndarray:
     return solve_ik(arm.model, arm.data, arm.hand_body, HAND_LOCAL_OFFSET, arm.joint_ids, waypoint)
 
 
-def run_episode(arm: Arm, seed: int, choose) -> dict:
+def run_episode(arm: Arm, seed: int, choose, look=None) -> dict:
     """Reach from seed `seed`'s start; `choose(obs) -> joint change` picks each move.
+    `look`, if given (a HeadCamera), takes a picture at each decision, kept in "images".
     Returns the rows seen and whether/when it reached the true target."""
     rng = arm.reset(seed)
     for _ in range(50):  # let the brick settle on the table before looking
         sim_step.step(arm.model, arm.data)
     target = sense_brick_top(arm, rng) + [0.0, 0.0, HOVER]
-    obs_rows, act_rows = [], []
+    obs_rows, act_rows, images = [], [], []
     prev_hand = arm.hand()
     for i in range(MAX_DECISIONS):
         obs = observation(target, arm.joints())
+        if look is not None:
+            images.append(look())
         act = choose(obs)
         obs_rows.append(obs)
         act_rows.append(act.astype(np.float32))
@@ -153,24 +178,26 @@ def run_episode(arm: Arm, seed: int, choose) -> dict:
         speed = np.linalg.norm(hand - prev_hand) / DECISION_DT
         prev_hand = hand
         if np.linalg.norm(hand - arm.true_target()) < REACHED and speed < STILL:
-            return dict(obs=obs_rows, act=act_rows, reached=True, decisions=i + 1,
+            return dict(obs=obs_rows, act=act_rows, images=images, reached=True, decisions=i + 1,
                         miss=float(np.linalg.norm(hand - arm.true_target())))
-    return dict(obs=obs_rows, act=act_rows, reached=False, decisions=MAX_DECISIONS,
+    return dict(obs=obs_rows, act=act_rows, images=images, reached=False, decisions=MAX_DECISIONS,
                 miss=float(np.linalg.norm(arm.hand() - arm.true_target())))
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--episodes", type=int, default=300, help="seeds 0..N-1")
+    p.add_argument("--camera", action="store_true", help="also save head-camera pictures")
     args = p.parse_args()
 
     arm = Arm()
-    obs, act, episode = [], [], []
+    look = HeadCamera(arm) if args.camera else None
+    obs, act, episode, images = [], [], [], []
     kept, unreachable, timed_out = 0, 0, 0
     t0 = time.time()
     for seed in range(args.episodes):
         try:
-            ep = run_episode(arm, seed, lambda o: ik_teacher(arm, o[:3]) - o[3:])
+            ep = run_episode(arm, seed, lambda o: ik_teacher(arm, o[:3]) - o[3:], look)
         except IKError:
             unreachable += 1
             continue
@@ -179,17 +206,22 @@ def main() -> None:
             continue
         obs += ep["obs"]
         act += ep["act"]
+        images += ep["images"]
         episode += [seed] * len(ep["obs"])
         kept += 1
-        if args.episodes <= 5 or seed % 50 == 0:
+        if args.episodes <= 5 or seed % (10 if args.camera else 50) == 0:
             print(f"seed {seed}: reached in {ep['decisions']} decisions "
                   f"({ep['decisions'] * DECISION_DT:.2f} s), {ep['miss'] * 1000:.1f} mm off")
 
     OUT.mkdir(parents=True, exist_ok=True)
-    np.savez(OUT / "demos.npz", obs=np.array(obs), act=np.array(act), episode=np.array(episode))
+    name = "demos_vision.npz" if args.camera else "demos.npz"
+    rows = dict(obs=np.array(obs), act=np.array(act), episode=np.array(episode))
+    if args.camera:
+        rows["image"] = np.array(images, dtype=np.uint8)
+    np.savez(OUT / name, **rows)
     print(f"\n{kept}/{args.episodes} episodes kept ({unreachable} unreachable by IK, "
           f"{timed_out} didn't settle in {MAX_DECISIONS * DECISION_DT:.0f} s), "
-          f"{len(obs)} rows -> logs/learned_policy/demos.npz  [{time.time() - t0:.0f} s]")
+          f"{len(obs)} rows -> logs/learned_policy/{name}  [{time.time() - t0:.0f} s]")
 
 
 if __name__ == "__main__":

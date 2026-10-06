@@ -7,11 +7,15 @@ The IK teacher runs on the same seeds for comparison. Success = record_demos' te
 hand within REACHED of the true hover point above the brick, and nearly still, inside
 MAX_DECISIONS.
 
-Writes a summary to logs/learned_policy/eval_results.txt.
+With --vision, the network is train_vision's VisionPolicy: it gets the head camera's
+picture and the joint angles, never the brick's position.
+
+Writes a summary to logs/learned_policy/eval_results.txt (--vision: eval_results_vision.txt).
 
 usage (repo folder):
   python learned_policy/evaluate.py               # 50 new spots
   python learned_policy/evaluate.py --episodes 1  # seed 1000 only
+  python learned_policy/evaluate.py --vision      # the camera-picture network
 """
 
 from __future__ import annotations
@@ -21,7 +25,9 @@ import time
 
 import numpy as np
 
-from record_demos import DECISION_DT, MAX_DECISIONS, OUT, REACHED, Arm, IKError, ik_teacher, run_episode
+from record_demos import (
+    DECISION_DT, MAX_DECISIONS, OUT, REACHED, Arm, HeadCamera, IKError, ik_teacher, run_episode,
+)
 from train import LearnedPolicy
 
 FIRST_SEED = 1000  # well clear of the demo seeds
@@ -57,20 +63,28 @@ def summary(name: str, results: list[dict]) -> str:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--episodes", type=int, default=50)
+    p.add_argument("--vision", action="store_true", help="the camera-picture network (train_vision.py)")
     args = p.parse_args()
     seeds = list(range(FIRST_SEED, FIRST_SEED + args.episodes))
 
-    arm, policy = Arm(), LearnedPolicy()
+    arm = Arm()
+    if args.vision:
+        from train_vision import VisionPolicy
+        camera, vision = HeadCamera(arm), VisionPolicy()
+        policy = lambda o: vision(camera(), o[3:])  # noqa: E731  (picture + joints; o[:3], the brick, unused)
+    else:
+        policy = LearnedPolicy()
     t0 = time.time()
     net = evaluate("network", arm, policy, seeds)
     ik = evaluate("IK", arm, lambda o: ik_teacher(arm, o[:3]) - o[3:], seeds)
 
-    lines = [f"{args.episodes} new brick spots (seeds {seeds[0]}-{seeds[-1]}), "
+    lines = [f"{'vision network (camera picture + joints)' if args.vision else 'network (brick xyz + joints)'}",
+             f"{args.episodes} new brick spots (seeds {seeds[0]}-{seeds[-1]}), "
              f"success = within {REACHED * 1000:.0f} mm and still, in {MAX_DECISIONS * DECISION_DT:.0f} s",
              summary("network", net), summary("IK", ik)]
     text = "\n".join(lines)
     print(f"\n{text}\n[{time.time() - t0:.0f} s]")
-    (OUT / "eval_results.txt").write_text(text + "\n")
+    (OUT / ("eval_results_vision.txt" if args.vision else "eval_results.txt")).write_text(text + "\n")
 
 
 if __name__ == "__main__":
