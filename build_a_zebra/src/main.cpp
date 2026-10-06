@@ -796,7 +796,8 @@ namespace zebra_bt
           target = wm_->getPartState(part).position;
         }
 
-        command_id_ = bridge_->send(skill, part, target);
+        const std::string facing = (skill == "pick") ? "FORWARD" : "";
+        command_id_ = bridge_->send(skill, part, target, facing);
 
         RCLCPP_INFO(node_->get_logger(), "[VLADecide] sent %s for %s [%s]",
                     skill.c_str(), part.c_str(), command_id_.c_str());
