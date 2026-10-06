@@ -10,6 +10,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <sstream>    // std::istringstream
+#include <algorithm>  // std::transform
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "behaviortree_cpp/bt_factory.h"
@@ -694,51 +696,90 @@ namespace zebra_bt
 
     BT::NodeStatus onStart() override
     {
-      RCLCPP_INFO(node_->get_logger(), "[VLADecide] waiting for /vla/decision...");
+      latest_decision_.clear();
+      command_id_.clear();
+      current_skill_.clear();
+      current_part_.clear();
+      state_ = WAITING_FOR_DECISION;
       wait_ticks_ = 0;
+      RCLCPP_INFO(node_->get_logger(), "[VLADecide] waiting for /vla/decision...");
       return BT::NodeStatus::RUNNING;
     }
 
     BT::NodeStatus onRunning() override
     {
-      if (latest_decision_.empty()) {
-        if (++wait_ticks_ > 60) {   // 30 s timeout at 2 Hz
-          RCLCPP_WARN(node_->get_logger(), "[VLADecide] timeout waiting for decision");
-          return BT::NodeStatus::FAILURE;
+      // --- Phase 1: wait for a decision ---
+      if (state_ == WAITING_FOR_DECISION) {
+        if (latest_decision_.empty()) {
+          if (++wait_ticks_ > 120) {
+            RCLCPP_WARN(node_->get_logger(), "[VLADecide] timeout waiting for decision");
+            return BT::NodeStatus::FAILURE;
+          }
+          return BT::NodeStatus::RUNNING;
         }
+
+        std::istringstream ss(latest_decision_);
+        std::string skill, part;
+        ss >> skill >> part;
+
+        if (skill == "DONE") {
+          latest_decision_.clear();
+          return BT::NodeStatus::SUCCESS;
+        }
+
+        const auto st = wm_->getPartState(part);
+        std::transform(skill.begin(), skill.end(), skill.begin(), ::tolower);
+
+        current_skill_ = skill;
+        current_part_  = part;
+        command_id_    = bridge_->send(skill, part, st.position);
+
+        RCLCPP_INFO(node_->get_logger(), "[VLADecide] sent %s for %s [%s]",
+                    skill.c_str(), part.c_str(), command_id_.c_str());
+
+        latest_decision_.clear();
+        state_ = WAITING_FOR_RESULT;
+        wait_ticks_ = 0;
         return BT::NodeStatus::RUNNING;
       }
 
-      RCLCPP_INFO(node_->get_logger(), "[VLADecide] got: %s", latest_decision_.c_str());
+      // --- Phase 2: wait for result ---
+      const std::string result = bridge_->status(command_id_);
 
-      std::istringstream ss(latest_decision_);
-      std::string skill, part;
-      ss >> skill >> part;
-
-      if (skill == "DONE") {
-        latest_decision_.clear();
+      if (result == "SUCCEEDED") {
+        RCLCPP_INFO(node_->get_logger(), "[VLADecide] %s succeeded", command_id_.c_str());
         return BT::NodeStatus::SUCCESS;
       }
 
-      const auto state = wm_->getPartState(part);
-      const auto target = state.position;
+      if (result == "FAILED" || ++wait_ticks_ > 180) {
+        RCLCPP_WARN(node_->get_logger(), "[VLADecide] %s failed", command_id_.c_str());
 
-      std::transform(skill.begin(), skill.end(), skill.begin(), ::tolower);
+        // Set the status so RecoveryManager can decide what to do
+        if (current_skill_ == "place") {
+          wm_->setPartStatus(current_part_, PartStatus::LOST);
+        } else {
+          wm_->setPartStatus(current_part_, PartStatus::PICK_FAILED);
+        }
+        return BT::NodeStatus::FAILURE;
+      }
 
-      bridge_->send(skill, part, target);
-      latest_decision_.clear();
-      return BT::NodeStatus::SUCCESS;
+      return BT::NodeStatus::RUNNING;
     }
-
     void onHalted() override {}
 
   private:
+    enum Phase { WAITING_FOR_DECISION, WAITING_FOR_RESULT };
+    Phase state_{WAITING_FOR_DECISION};
+
     rclcpp::Node::SharedPtr node_;
     SkillBridgePtr bridge_;
     WorldModelPtr wm_;
     RolesMapPtr roles_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr decision_sub_;
     std::string latest_decision_;
+    std::string current_skill_;
+    std::string current_part_;
+    std::string command_id_;
     int wait_ticks_{0};
   };
 

@@ -1,7 +1,7 @@
 import os
 from PIL import Image
 from google import genai
-from secrets import GOOGLE_API_KEY
+from apikeys import GOOGLE_API_KEY
 
 
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])#print("Available models:")

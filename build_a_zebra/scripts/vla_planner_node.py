@@ -5,14 +5,14 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from PIL import Image as PILImage
 from google import genai
-from secrets import GOOGLE_API_KEY
+from apikeys import GOOGLE_API_KEY
 import json
 
 class VLAPlanner(Node):
     def __init__(self):
         super().__init__("vla_planner")
 
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        self.client = genai.Client(api_key=...)
         self.bridge = CvBridge()
         self.latest_image = None
         self.latest_perception = {}
@@ -75,3 +75,6 @@ def main():
     node = VLAPlanner()
     rclpy.spin(node)
     rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

@@ -24,7 +24,7 @@
   </BehaviorTree>
 
   <BehaviorTree ID="AssemblePart">
-    <Fallback name="PartFallback">
+    <ReactiveFallback name="PartFallback">
       <IsPartPlaced part="{part}"/>
       <IsPartEscalated part="{part}"/>
 
@@ -34,34 +34,18 @@
           <LocatePart part="{part}"/>
         </Fallback>
 
-        <!-- VLA decides which skill to try next -->
-        <VLADecide/>
-
-        <Fallback name="EnsureUpright">
-          <IsPartUpright part="{part}"/>
-          <RecoveryPolicy part="{part}">
-            <FlipPart part="{part}"/>
-          </RecoveryPolicy>
-        </Fallback>
-
         <RecoveryPolicy part="{part}">
-          <Sequence name="PoseAndPick">
-            <Fallback name="EnsureUpright">
-              <IsPartUpright part="{part}"/>
-              <FlipPart part="{part}"/>
-            </Fallback>
-            <PickPart part="{part}"/>
-          </Sequence>
+          <VLADecide/>
         </RecoveryPolicy>
 
-        <PlacePart part="{part}"/>
+        <IsPartPlaced part="{part}"/>
 
         <Fallback name="CheckFacing">
           <IsPartFacingForward part="{part}"/>
           <MarkEscalated part="{part}"/>
         </Fallback>
       </Sequence>
-    </Fallback>
+    </ReactiveFallback>
   </BehaviorTree>
 
   <TreeNodesModel>
