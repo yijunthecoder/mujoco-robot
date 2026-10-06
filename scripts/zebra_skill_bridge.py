@@ -117,6 +117,11 @@ def main() -> None:
              "(same moves and decisions, less waiting; default 1)",
     )
     parser.add_argument(
+        "--image-interval", type=float, default=1.0,
+        help="publish the head camera's picture on /camera/image_raw this often, in seconds, "
+             "for Victor's VLA planner (default 1; 0 = off)",
+    )
+    parser.add_argument(
         "--confirm-moves", choices=move_check.MODES, default="off",
         help="print each arm move's joint changes and wait for ENTER before it runs: "
              "'first' move only, 'all' moves, or 'off' (default)",
@@ -154,6 +159,7 @@ def main() -> None:
         start=start,
         speed=args.speed,
         headless=args.headless,
+        image_interval=args.image_interval,
     )
 
 

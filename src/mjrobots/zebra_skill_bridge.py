@@ -82,6 +82,7 @@ from std_msgs.msg import String
 
 from . import sim_step
 from .camera_calibration import CAMERAS, REFERENCE_CAMERA
+from .camera_image_publisher import HeadCameraImagePublisher
 from .pick_place import _RealtimeClock, _ThrottledSync
 from .scatter import (STACK_XY, TABLE_Z, UPRIGHT, Zone, arm_bases, choose_arm, describe, drop_bricks,
                       place_bricks, scatter_bricks)
@@ -195,17 +196,17 @@ def _bump_brick(model, data, brick_id: int, delta: np.ndarray) -> None:
 
 
 class _PerceivingSync:
-    """`_ThrottledSync` that also gives perception a chance to publish on
-    every physics step - grasp_part/place_part call `render.step()` each
-    step, so this keeps perception going through a whole blocking move."""
+    """`_ThrottledSync` that also gives perception (and the head-camera picture) a chance
+    to publish on every physics step - grasp_part/place_part call `render.step()` each
+    step, so this keeps them going through a whole blocking move."""
 
-    def __init__(self, render: _ThrottledSync, perception: ZebraPerceptionPublisher) -> None:
+    def __init__(self, render: _ThrottledSync, publish) -> None:
         self._render = render
-        self._perception = perception
+        self._publish = publish
 
     def step(self) -> None:
         self._render.step()
-        self._perception.maybe_publish()
+        self._publish()
 
 
 class _NoViewer:
@@ -238,6 +239,7 @@ def run_bridge(
     start: str = "place",
     speed: float = 1.0,
     headless: bool = False,
+    image_interval: float = 1.0,
 ) -> None:
     """`arm` is "nearest" (each brick picked by the arm nearest to it, see
     the module docstring) or "left"/"right" (that arm does everything).
@@ -276,7 +278,10 @@ def run_bridge(
     demos at 4x: same flips, same placements, ~1 min each instead of ~3.
 
     `headless`: no MuJoCo window (automated checks, scripts/check_demos.sh) - runs until
-    stopped (Ctrl+C / killed)."""
+    stopped (Ctrl+C / killed).
+
+    `image_interval`: the head camera's picture goes on /camera/image_raw this often (s),
+    for Victor's VLA planner (camera_image_publisher.py); 0 = no pictures."""
     from .gl import configure_gl
 
     configure_gl(prefer_gl)
@@ -331,6 +336,15 @@ def run_bridge(
     executor = rclpy.executors.SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(perception)
+    camera = HeadCameraImagePublisher(model, data, image_interval) if image_interval > 0 else None
+    if camera is not None:
+        executor.add_node(camera)
+
+    def _publish_senses() -> None:
+        """Perception's positions and the head-camera picture, each when it's due."""
+        perception.maybe_publish()
+        if camera is not None:
+            camera.maybe_publish()
 
     relook_camera: dict[str, str] = {}  # part id -> camera its last look again used
     placed_at: dict[str, np.ndarray] = {}  # part id -> center it was placed (and checked) at
@@ -505,7 +519,7 @@ def run_bridge(
 
     try:
         with (_NoViewer() if headless else mujoco.viewer.launch_passive(model, data)) as viewer:
-            render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), perception)
+            render = _PerceivingSync(_ThrottledSync(viewer, model, step_dt=sim_step.CONTROL_DT), _publish_senses)
             node.get_logger().info(
                 f"Ready - watching {COMMAND_TOPIC} for legs/body/head "
                 + ("(nearest arm per brick)." if arm == "nearest" else f"({arm} arm).")
@@ -602,7 +616,7 @@ def run_bridge(
                                     sensing.print_look(part_id),
                                     # still upright in the hand? (stand-in, like perception's LYING)
                                     still_upright=lambda d: sensing.how_it_lies(part_id, d) == UPRIGHT,
-                                    idle=perception.maybe_publish, look_held=sensing.held_brick_look(part_id),
+                                    idle=_publish_senses, look_held=sensing.held_brick_look(part_id),
                                     other_xy=sensing.other_bricks_xy(part_id),
                                     on_seen=lambda c, y: _print_seen(part_id, c, y))
                             except FacingError as exc:
@@ -806,6 +820,8 @@ def run_bridge(
         if planner is not None:
             planner.close()
         perception.destroy_node()
+        if camera is not None:
+            camera.destroy_node()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
