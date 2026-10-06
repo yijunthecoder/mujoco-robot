@@ -1,4 +1,6 @@
-import os
+import json
+import time
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -16,119 +18,105 @@ class VLAPlanner(Node):
         self.client = genai.Client(api_key=GOOGLE_API_KEY)
         self.bridge = CvBridge()
         self.latest_image = None
-        self.latest_perception = {}   # pid -> {"status": ..., "orientation": ...}
-        self.last_state_key = None
 
-        # Subscribers
+        # Camera: keep the newest frame only.
         self.create_subscription(Image, "/camera/image_raw", self.on_image, 10)
-        self.create_subscription(
-            String, "/zebra/perception_updates", self.on_perception, 10)
 
-        # Publisher
+        # One request -> one decision. VLADecide publishes JSON here.
+        self.create_subscription(String, "/vla/request", self.on_request, 10)
+
         self.decision_pub = self.create_publisher(String, "/vla/decision", 10)
 
-        # Ask at most once every 10 s, and only when state changes
-        self.create_timer(10.0, self.decide)
+        self.get_logger().info(
+            "VLAPlanner ready — waiting for /vla/request")
 
     # ------------------------------------------------------------------
     # Subscriber callbacks
     # ------------------------------------------------------------------
     def on_image(self, msg):
-        self.latest_image = self.bridge.imgmsg_to_cv2(msg, "rgb8")
+        try:
+            self.latest_image = self.bridge.imgmsg_to_cv2(msg, "rgb8")
+        except Exception as e:
+            self.get_logger().error(f"cv_bridge failed: {e}")
 
-    def on_perception(self, msg):
-        # Format: part,STATUS,x,y,z,orientation,yaw,facing
-        fields = msg.data.split(",")
-        if len(fields) < 6:
-            return
-        self.latest_perception[fields[0]] = {
-            "status": fields[1],
-            "orientation": fields[5],
-        }
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-    def current_part(self):
-        """The part the tree is currently working on: first one that isn't
-        PLACED or ESCALATED, in build order."""
-        for pid in ["31111p0e", "31111p0f", "31111p0g"]:
-            info = self.latest_perception.get(pid)
-            if info is None:
-                return pid
-            if info["status"] not in ("PLACED", "ESCALATED"):
-                return pid
-        return "DONE"
-
-    # ------------------------------------------------------------------
-    # Main decision loop
-    # ------------------------------------------------------------------
-    def decide(self):
+    def on_request(self, msg):
         if self.latest_image is None:
+            # Don't answer with a guess; VLADecide will retry with a
+            # fresh request_id, so we just drop this one.
+            self.get_logger().warn(
+                "request received before first camera frame — dropping")
             return
 
-        # Skip if nothing changed since the last decision
-        state_key = tuple(sorted(
-            (pid, info["status"], info["orientation"])
-            for pid, info in self.latest_perception.items()
-        ))
-        if state_key == self.last_state_key:
+        try:
+            req = json.loads(msg.data)
+            request_id = req["request_id"]
+            part_id    = req["part_id"]
+            status     = req.get("status", "UNKNOWN")
+            orientation = req.get("orientation", "UNKNOWN")
+            facing     = req.get("facing", "UNKNOWN")
+        except Exception as e:
+            self.get_logger().error(f"bad request JSON: {e}")
             return
-        self.last_state_key = state_key
-
-        part = self.current_part()
-        if part == "DONE":
-            return
-
-        # Build a readable state block
-        state_lines = []
-        for pid in ["31111p0e", "31111p0f", "31111p0g"]:
-            info = self.latest_perception.get(pid, {})
-            status = info.get("status", "UNKNOWN")
-            orient = info.get("orientation", "UNKNOWN")
-            state_lines.append(f"- {pid}: status={status}, orientation={orient}")
-        state_text = "\n".join(state_lines)
 
         prompt = f"""
 You are controlling a robot arm building a LEGO zebra.
 
-Allowed part IDs (copy exactly):
-- 31111p0e
-- 31111p0f
-- 31111p0g
-
-The robot is currently working on: {part}
-Your answer must use {part}, not a different part.
-
-Current state of the table:
-{state_text}
+The robot is currently working on part: {part_id}
+Current perception state for this part:
+- status: {status}
+- orientation: {orientation}
+- facing: {facing}
 
 Rules, in order — use the FIRST one that matches:
 1. If status is PLACED, answer: DONE
-2. If orientation is anything other than UPRIGHT, answer: FLIP {part}
-3. If status is PICKED, answer: PLACE {part}
-4. Otherwise, answer: PICK {part}
+2. If orientation is anything other than UPRIGHT, answer: FLIP {part_id}
+3. If status is PICKED, answer: PLACE {part_id}
+4. Otherwise, answer: PICK {part_id}
 
 Answer with exactly one line, nothing else.
 """
 
         pil_image = PILImage.fromarray(self.latest_image)
 
-        try:
-            response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[pil_image, prompt],
-                config={"max_output_tokens": 10, "temperature": 0},
-            )
-            decision = response.text.strip()
-        except Exception as e:
-            self.get_logger().error(f"Gemini call failed: {e}")
+        decision = None
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                response = self.client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[pil_image, prompt],
+                    config={
+                        "max_output_tokens": 300,
+                        "temperature": 0,
+                        "thinking_config": {"thinking_budget": 0},
+                    },
+                )
+                text = (response.text or "").strip()
+                if text:
+                    decision = text.splitlines()[0].strip()
+                    break
+                last_err = "empty response"
+            except Exception as e:
+                last_err = str(e)
+                self.get_logger().warn(
+                    f"Gemini call failed (attempt {attempt}/3): {e}")
+                time.sleep(1.0)
+
+        if decision is None:
+            self.get_logger().error(
+                f"Gemini failed for {request_id}: {last_err}")
+            # No reply — VLADecide's wait_ticks_ timeout will fire and
+            # the tree will retry with a new request_id.
             return
 
-        self.get_logger().info(f"VLA decision: {decision}")
+        self.get_logger().info(
+            f"VLA decision for {request_id} ({part_id}): {decision}")
 
         out = String()
-        out.data = decision
+        out.data = json.dumps({
+            "request_id": request_id,
+            "decision":   decision,
+        })
         self.decision_pub.publish(out)
 
 
