@@ -25,3 +25,4 @@ venv/
 build/
 install/
 log/
+build_a_zebra/scripts/secrets.py

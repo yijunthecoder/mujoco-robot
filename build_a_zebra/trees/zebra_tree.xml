@@ -34,6 +34,9 @@
           <LocatePart part="{part}"/>
         </Fallback>
 
+        <!-- VLA decides which skill to try next -->
+        <VLADecide/>
+
         <Fallback name="EnsureUpright">
           <IsPartUpright part="{part}"/>
           <RecoveryPolicy part="{part}">
@@ -92,6 +95,7 @@
     <Action ID="FlipPart">
       <input_port name="part"/>
     </Action>
+    <Action ID="VLADecide"/>
     <Decorator ID="RecoveryPolicy">
       <input_port name="part"/>
     </Decorator>

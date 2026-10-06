@@ -121,6 +121,8 @@ namespace zebra_bt
       return;
     }
 
+    const auto old_status = it->second.status;
+
     it->second.status = status;
     if (!xs.empty() && !ys.empty() && !zs.empty()) {
       it->second.position.x = stod(xs);
@@ -144,9 +146,11 @@ namespace zebra_bt
 
     it->second.last_update = std::chrono::steady_clock::now();
     it->second.seen_by_perception = true;
-
-    RCLCPP_INFO(node_->get_logger(), "[WorldModel] %s -> %s",
-                part.c_str(), toString(status).c_str());
+    
+    if (old_status != status) {
+      RCLCPP_INFO(node_->get_logger(), "[WorldModel] %s -> %s",
+                  part.c_str(), toString(status).c_str());
+    }
   }
 
   PartState WorldModel::getPartState(const string & part_name)

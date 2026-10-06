@@ -249,15 +249,38 @@ namespace zebra_bt
   void flush() override {}
 };
 
-//! ---------------------------------------------------------------------
-// Condition nodes.
-//! ---------------------------------------------------------------------
+  //! ---------------------------------------------------------------------
+  // Condition nodes.
+  //! ---------------------------------------------------------------------
 
   class IsPartPlaced : public BT::ConditionNode
+    {
+    public:
+      IsPartPlaced(const std::string & name, const BT::NodeConfig & config,
+                  WorldModelPtr wm)
+      : BT::ConditionNode(name, config), wm_(wm) {}
+
+      static BT::PortsList providedPorts()
+      { return {BT::InputPort<std::string>("part")}; }
+
+      BT::NodeStatus tick() override
+      {
+        std::string part;
+        getInput("part", part);
+        return wm_->getPartState(part).status == PartStatus::PLACED
+          ? BT::NodeStatus::SUCCESS
+          : BT::NodeStatus::FAILURE;
+      }
+
+    private:
+      WorldModelPtr wm_;
+    };
+
+  class IsPartLocated : public BT::ConditionNode
   {
   public:
-    IsPartPlaced(const std::string & name, const BT::NodeConfig & config,
-                WorldModelPtr wm)
+    IsPartLocated(const std::string & name, const BT::NodeConfig & config,
+                  WorldModelPtr wm)
     : BT::ConditionNode(name, config), wm_(wm) {}
 
     static BT::PortsList providedPorts()
@@ -267,7 +290,31 @@ namespace zebra_bt
     {
       std::string part;
       getInput("part", part);
-      return wm_->getPartState(part).status == PartStatus::PLACED
+      const auto status = wm_->getPartState(part).status;
+      const bool located =
+        status == PartStatus::LOCATED || status == PartStatus::PICKED;
+      return located ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    }
+
+  private:
+    WorldModelPtr wm_;
+  };
+
+  class IsPartEscalated : public BT::ConditionNode
+  {
+  public:
+    IsPartEscalated(const std::string & name, const BT::NodeConfig & config,
+                    WorldModelPtr wm)
+    : BT::ConditionNode(name, config), wm_(wm) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus tick() override
+    {
+      std::string part;
+      getInput("part", part);
+      return wm_->getPartState(part).status == PartStatus::ESCALATED
         ? BT::NodeStatus::SUCCESS
         : BT::NodeStatus::FAILURE;
     }
@@ -276,317 +323,495 @@ namespace zebra_bt
     WorldModelPtr wm_;
   };
 
-class IsPartLocated : public BT::ConditionNode
-{
-public:
-  IsPartLocated(const std::string & name, const BT::NodeConfig & config,
-                WorldModelPtr wm)
-  : BT::ConditionNode(name, config), wm_(wm) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus tick() override
+  class IsPartUpright : public BT::ConditionNode
   {
-    std::string part;
-    getInput("part", part);
-    const auto status = wm_->getPartState(part).status;
-    const bool located =
-      status == PartStatus::LOCATED || status == PartStatus::PICKED;
-    return located ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
-  }
-
-private:
-  WorldModelPtr wm_;
-};
-
-class IsPartEscalated : public BT::ConditionNode
-{
-public:
-  IsPartEscalated(const std::string & name, const BT::NodeConfig & config,
+  public:
+    IsPartUpright(const std::string & name, const BT::NodeConfig & config,
                   WorldModelPtr wm)
-  : BT::ConditionNode(name, config), wm_(wm) {}
+    : BT::ConditionNode(name, config), wm_(wm) {}
 
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
 
-  BT::NodeStatus tick() override
-  {
-    std::string part;
-    getInput("part", part);
-    return wm_->getPartState(part).status == PartStatus::ESCALATED
-      ? BT::NodeStatus::SUCCESS
-      : BT::NodeStatus::FAILURE;
-  }
-
-private:
-  WorldModelPtr wm_;
-};
-
-class IsPartUpright : public BT::ConditionNode
-{
-public:
-  IsPartUpright(const std::string & name, const BT::NodeConfig & config,
-                WorldModelPtr wm)
-  : BT::ConditionNode(name, config), wm_(wm) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus tick() override
-  {
-    std::string part;
-    getInput("part", part);
-    return wm_->getPartState(part).orientation == Orientation::UPRIGHT
-      ? BT::NodeStatus::SUCCESS
-      : BT::NodeStatus::FAILURE;
-  }
-
-private:
-  WorldModelPtr wm_;
-};
-
-class IsPartFacingForward : public BT::ConditionNode
-{
-public:
-  IsPartFacingForward(const std::string & name, const BT::NodeConfig & config,
-                      WorldModelPtr wm)
-  : BT::ConditionNode(name, config), wm_(wm) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus tick() override
-  {
-    std::string part;
-    getInput("part", part);
-    const auto f = wm_->getPartState(part).facing;
-    return (f == Facing::FORWARD || f == Facing::UNKNOWN)
-      ? BT::NodeStatus::SUCCESS
-      : BT::NodeStatus::FAILURE;
-  }
-
-private:
-  WorldModelPtr wm_;
-};
-
-// ---------------------------------------------------------------------
-// MarkEscalated — used when a part is skipped because the part it depends
-// on was escalated. Sets the skipped part to ESCALATED so allPartsResolved()
-// can finish the loop.
-// ---------------------------------------------------------------------
-class MarkEscalated : public BT::SyncActionNode
-{
-public:
-  MarkEscalated(const std::string & name, const BT::NodeConfig & config,
-                WorldModelPtr wm, RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::SyncActionNode(name, config),
-    wm_(wm), roles_(roles), logger_(logger) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus tick() override
-  {
-    std::string part;
-    getInput("part", part);
-
-    if (wm_->getPartState(part).status != PartStatus::ESCALATED) {
-      wm_->setPartStatus(part, PartStatus::ESCALATED);
-      RCLCPP_WARN(
-        logger_,
-        "[ABORT]   %s: skipped, depends on escalated predecessor",
-        prettyPart(part, roles_).c_str());
+    BT::NodeStatus tick() override
+    {
+      std::string part;
+      getInput("part", part);
+      return wm_->getPartState(part).orientation == Orientation::UPRIGHT
+        ? BT::NodeStatus::SUCCESS
+        : BT::NodeStatus::FAILURE;
     }
-    return BT::NodeStatus::SUCCESS;
-  }
 
-private:
-  WorldModelPtr wm_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-};
+  private:
+    WorldModelPtr wm_;
+  };
 
-// ---------------------------------------------------------------------
-// Action nodes.
-// ---------------------------------------------------------------------
-
-class LocatePart : public BT::StatefulActionNode
-{
-public:
-  LocatePart(const std::string & name, const BT::NodeConfig & config,
-             WorldModelPtr wm, RecoveryManagerPtr rm,
-             RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::StatefulActionNode(name, config),
-    wm_(wm), rm_(rm), roles_(roles), logger_(logger) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus onStart() override
+  class IsPartFacingForward : public BT::ConditionNode
   {
-    getInput("part", part_);
-    search_ticks_ = 0;
+  public:
+    IsPartFacingForward(const std::string & name, const BT::NodeConfig & config,
+                        WorldModelPtr wm)
+    : BT::ConditionNode(name, config), wm_(wm) {}
 
-    const auto state = wm_->getPartState(part_);
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
 
-    if (state.status == PartStatus::LOST) {
-      const auto action = rm_->decide(part_, zebra_bt::FailureType::PART_LOST);
+    BT::NodeStatus tick() override
+    {
+      std::string part;
+      getInput("part", part);
+      const auto f = wm_->getPartState(part).facing;
+      return (f == Facing::FORWARD || f == Facing::UNKNOWN)
+        ? BT::NodeStatus::SUCCESS
+        : BT::NodeStatus::FAILURE;
+    }
 
-      RCLCPP_WARN(
+  private:
+    WorldModelPtr wm_;
+  };
+
+  // ---------------------------------------------------------------------
+  // MarkEscalated — used when a part is skipped because the part it depends
+  // on was escalated. Sets the skipped part to ESCALATED so allPartsResolved()
+  // can finish the loop.
+  // ---------------------------------------------------------------------
+  class MarkEscalated : public BT::SyncActionNode
+  {
+  public:
+    MarkEscalated(const std::string & name, const BT::NodeConfig & config,
+                  WorldModelPtr wm, RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::SyncActionNode(name, config),
+      wm_(wm), roles_(roles), logger_(logger) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus tick() override
+    {
+      std::string part;
+      getInput("part", part);
+
+      if (wm_->getPartState(part).status != PartStatus::ESCALATED) {
+        wm_->setPartStatus(part, PartStatus::ESCALATED);
+        RCLCPP_WARN(
+          logger_,
+          "[ABORT]   %s: skipped, depends on escalated predecessor",
+          prettyPart(part, roles_).c_str());
+      }
+      return BT::NodeStatus::SUCCESS;
+    }
+
+  private:
+    WorldModelPtr wm_;
+    RolesMapPtr roles_;
+    rclcpp::Logger logger_;
+  };
+
+  // ---------------------------------------------------------------------
+  // Action nodes.
+  // ---------------------------------------------------------------------
+
+  class LocatePart : public BT::StatefulActionNode
+  {
+  public:
+    LocatePart(const std::string & name, const BT::NodeConfig & config,
+              WorldModelPtr wm, RecoveryManagerPtr rm,
+              RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::StatefulActionNode(name, config),
+      wm_(wm), rm_(rm), roles_(roles), logger_(logger) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus onStart() override
+    {
+      getInput("part", part_);
+      search_ticks_ = 0;
+
+      const auto state = wm_->getPartState(part_);
+
+      if (state.status == PartStatus::LOST) {
+        const auto action = rm_->decide(part_, zebra_bt::FailureType::PART_LOST);
+
+        RCLCPP_WARN(
+          logger_,
+          "[RECOVER] %s (lost): decision = %s",
+          prettyPart(part_, roles_).c_str(),
+          zebra_bt::toString(action).c_str());
+
+        if (action == zebra_bt::RecoveryAction::ESCALATE) {
+          wm_->setPartStatus(part_, PartStatus::ESCALATED);
+          RCLCPP_ERROR(
+            logger_,
+            "[ABORT]   %s: too many losses, escalating to human",
+            prettyPart(part_, roles_).c_str());
+          return BT::NodeStatus::FAILURE;
+        }
+      }
+
+      RCLCPP_INFO(
         logger_,
-        "[RECOVER] %s (lost): decision = %s",
-        prettyPart(part_, roles_).c_str(),
-        zebra_bt::toString(action).c_str());
+        "[LOCATE]  %s: searching...",
+        prettyPart(part_, roles_).c_str());
 
-      if (action == zebra_bt::RecoveryAction::ESCALATE) {
-        wm_->setPartStatus(part_, PartStatus::ESCALATED);
+      return BT::NodeStatus::RUNNING;
+    }
+
+    BT::NodeStatus onRunning() override
+    {
+      ++search_ticks_;
+
+      const auto state = wm_->getPartState(part_);
+
+      // Success: perception has located the part.
+      if (state.seen_by_perception && state.status == PartStatus::LOCATED) {
+        RCLCPP_INFO(
+          logger_,
+          "[LOCATE]  %s: found at (%.2f, %.2f, %.2f)",
+          prettyPart(part_, roles_).c_str(),
+          state.position.x, state.position.y, state.position.z);
+        return BT::NodeStatus::SUCCESS;
+      }
+
+      // Timeout: no perception within budget. Mark LOST so RecoveryPolicy
+      // (called from onStart next tick) decides RETRY / RELOCATE / ESCALATE.
+      if (search_ticks_ > locate_timeout_ticks_) {
+        RCLCPP_WARN(
+          logger_,
+          "[LOCATE]  %s: no perception after %.1fs -- marking LOST",
+          prettyPart(part_, roles_).c_str(),
+          locate_timeout_ticks_ / 2.0);
+        wm_->setPartStatus(part_, PartStatus::LOST);
+        return BT::NodeStatus::FAILURE;
+      }
+
+      // Still waiting.
+      return BT::NodeStatus::RUNNING;
+    }
+
+    void onHalted() override {}
+
+  private:
+    WorldModelPtr wm_;
+    RecoveryManagerPtr rm_;
+    RolesMapPtr roles_;
+    rclcpp::Logger logger_;
+    std::string part_;
+    int search_ticks_{0};
+    static constexpr int locate_timeout_ticks_{20};   // 10 s at 2 Hz
+  };
+
+  class PickPart : public BT::StatefulActionNode
+  {
+  public:
+    PickPart(const std::string & name, const BT::NodeConfig & config,
+            WorldModelPtr wm, SkillBridgePtr bridge,
+            RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::StatefulActionNode(name, config),
+      wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus onStart() override
+    {
+      getInput("part", part_);
+      const auto state = wm_->getPartState(part_);
+
+      if (state.status == PartStatus::LOST) {
         RCLCPP_ERROR(
           logger_,
-          "[ABORT]   %s: too many losses, escalating to human",
+          "[PICK]    %s: CANNOT pick - part is LOST",
           prettyPart(part_, roles_).c_str());
         return BT::NodeStatus::FAILURE;
       }
-    }
 
-    RCLCPP_INFO(
-      logger_,
-      "[LOCATE]  %s: searching...",
-      prettyPart(part_, roles_).c_str());
+      attempt_ = wm_->incrementPickAttempts(part_);
+      command_id_ = bridge_->send("pick", part_, state.position, "FORWARD");
 
-    return BT::NodeStatus::RUNNING;
-  }
-
-  BT::NodeStatus onRunning() override
-  {
-    ++search_ticks_;
-
-    const auto state = wm_->getPartState(part_);
-
-    // Success: perception has located the part.
-    if (state.seen_by_perception && state.status == PartStatus::LOCATED) {
       RCLCPP_INFO(
         logger_,
-        "[LOCATE]  %s: found at (%.2f, %.2f, %.2f)",
+        "[PICK]    %s: attempt %d, target (%.2f, %.2f, %.2f)  [%s]",
         prettyPart(part_, roles_).c_str(),
-        state.position.x, state.position.y, state.position.z);
-      return BT::NodeStatus::SUCCESS;
+        attempt_,
+        state.position.x, state.position.y, state.position.z,
+        command_id_.c_str());
+
+      wait_ticks_ = 0;
+      return BT::NodeStatus::RUNNING;
     }
 
-    // Timeout: no perception within budget. Mark LOST so RecoveryPolicy
-    // (called from onStart next tick) decides RETRY / RELOCATE / ESCALATE.
-    if (search_ticks_ > locate_timeout_ticks_) {
-      RCLCPP_WARN(
-        logger_,
-        "[LOCATE]  %s: no perception after %.1fs -- marking LOST",
-        prettyPart(part_, roles_).c_str(),
-        locate_timeout_ticks_ / 2.0);
-      wm_->setPartStatus(part_, PartStatus::LOST);
-      return BT::NodeStatus::FAILURE;
-    }
+    BT::NodeStatus onRunning() override
+    {
+      const std::string result = bridge_->status(command_id_);
 
-    // Still waiting.
-    return BT::NodeStatus::RUNNING;
-  }
+      if (result == "SUCCEEDED") {
+        wm_->setPartStatus(part_, PartStatus::PICKED);
+        wm_->resetPickAttempts(part_);
+        RCLCPP_INFO(
+          logger_,
+          "[PICK]    %s: SUCCESS (attempt %d)",
+          prettyPart(part_, roles_).c_str(), attempt_);
+        return BT::NodeStatus::SUCCESS;
 
-  void onHalted() override {}
+      }
 
-private:
-  WorldModelPtr wm_;
-  RecoveryManagerPtr rm_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-  std::string part_;
-  int search_ticks_{0};
-  static constexpr int locate_timeout_ticks_{20};   // 10 s at 2 Hz
-};
+      if (result == "FAILED") { 
+        const std::string reason_code = bridge_->reason(command_id_);
+        const std::string message_txt = bridge_->message(command_id_);
 
-class PickPart : public BT::StatefulActionNode
-{
-public:
-  PickPart(const std::string & name, const BT::NodeConfig & config,
-           WorldModelPtr wm, SkillBridgePtr bridge,
-           RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::StatefulActionNode(name, config),
-    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+        if (reason_code == "FACING_IMPOSSIBLE") {
+          wm_->setPartStatus(part_, PartStatus::ESCALATED);
+          RCLCPP_ERROR(logger_, "[PICK] %s: PERMANENT FAILURE -- %s",
+                      prettyPart(part_, roles_).c_str(), message_txt.c_str());
+          return BT::NodeStatus::FAILURE;
+        }
 
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus onStart() override
-  {
-    getInput("part", part_);
-    const auto state = wm_->getPartState(part_);
-
-    if (state.status == PartStatus::LOST) {
-      RCLCPP_ERROR(
-        logger_,
-        "[PICK]    %s: CANNOT pick - part is LOST",
-        prettyPart(part_, roles_).c_str());
-      return BT::NodeStatus::FAILURE;
-    }
-
-    attempt_ = wm_->incrementPickAttempts(part_);
-    command_id_ = bridge_->send("pick", part_, state.position, "FORWARD");
-
-    RCLCPP_INFO(
-      logger_,
-      "[PICK]    %s: attempt %d, target (%.2f, %.2f, %.2f)  [%s]",
-      prettyPart(part_, roles_).c_str(),
-      attempt_,
-      state.position.x, state.position.y, state.position.z,
-      command_id_.c_str());
-
-    wait_ticks_ = 0;
-    return BT::NodeStatus::RUNNING;
-  }
-
-  BT::NodeStatus onRunning() override
-  {
-    const std::string result = bridge_->status(command_id_);
-
-    if (result == "SUCCEEDED") {
-      wm_->setPartStatus(part_, PartStatus::PICKED);
-      wm_->resetPickAttempts(part_);
-      RCLCPP_INFO(
-        logger_,
-        "[PICK]    %s: SUCCESS (attempt %d)",
-        prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::SUCCESS;
-
-    }
-
-    if (result == "FAILED") { 
-      const std::string reason_code = bridge_->reason(command_id_);
-      const std::string message_txt = bridge_->message(command_id_);
-
-      if (reason_code == "FACING_IMPOSSIBLE") {
-        wm_->setPartStatus(part_, PartStatus::ESCALATED);
-        RCLCPP_ERROR(logger_, "[PICK] %s: PERMANENT FAILURE -- %s",
-                    prettyPart(part_, roles_).c_str(), message_txt.c_str());
+        // NEEDS_FLIP or any other reason → normal retry path
+        wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
+        RCLCPP_WARN(logger_, "[PICK] %s: FAILED (attempt %d) -- %s",
+        prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
         return BT::NodeStatus::FAILURE;
       }
 
-      // NEEDS_FLIP or any other reason → normal retry path
-      wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
-      RCLCPP_WARN(logger_, "[PICK] %s: FAILED (attempt %d) -- %s",
-      prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
-      return BT::NodeStatus::FAILURE;
+      if (++wait_ticks_ > 180) {
+        wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
+        RCLCPP_WARN(
+          logger_,
+          "[PICK]    %s: TIMEOUT after 90s -- no reply from executor",
+          prettyPart(part_, roles_).c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+
+      return BT::NodeStatus::RUNNING;
     }
 
-    if (++wait_ticks_ > 180) {
-      wm_->setPartStatus(part_, PartStatus::PICK_FAILED);
-      RCLCPP_WARN(
+    void onHalted() override {}
+
+    private:
+      WorldModelPtr wm_;
+      SkillBridgePtr bridge_;
+      RolesMapPtr roles_;
+      rclcpp::Logger logger_;
+      std::string part_;
+      std::string command_id_;
+      int attempt_{0};
+      int wait_ticks_{0};
+  };
+
+  class PlacePart : public BT::StatefulActionNode
+  {
+  public:
+    PlacePart(const std::string & name, const BT::NodeConfig & config,
+              WorldModelPtr wm, SkillBridgePtr bridge,
+              RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::StatefulActionNode(name, config),
+      wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus onStart() override
+    {
+      getInput("part", part_);
+      const auto state = wm_->getPartState(part_);
+
+      if (state.status != PartStatus::PICKED) {
+        RCLCPP_ERROR(
+          logger_,
+          "[PLACE]   %s: CANNOT place - part is not currently held",
+          prettyPart(part_, roles_).c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+      
+      const auto place_target = placeTargetFor(part_);
+      command_id_ = bridge_->send("place", part_, place_target);
+      RCLCPP_INFO(
         logger_,
-        "[PICK]    %s: TIMEOUT after 90s -- no reply from executor",
-        prettyPart(part_, roles_).c_str());
-      return BT::NodeStatus::FAILURE;
+        "[PLACE]   %s: placing at (%.2f, %.2f, %.2f)  [%s]",
+        prettyPart(part_, roles_).c_str(),
+        place_target.x, place_target.y, place_target.z,
+        command_id_.c_str());
+
+      wait_ticks_ = 0;
+      return BT::NodeStatus::RUNNING;
     }
 
-    return BT::NodeStatus::RUNNING;
-  }
+    BT::NodeStatus onRunning() override
+    {
+      const std::string result = bridge_->status(command_id_);
 
-  void onHalted() override {}
+      if (result == "SUCCEEDED") {
+        wm_->setPartStatus(part_, PartStatus::PLACED);
+        RCLCPP_INFO(
+          logger_,
+          "[PLACE]   %s: SUCCESS -- part is on the zebra",
+          prettyPart(part_, roles_).c_str());
+        return BT::NodeStatus::SUCCESS;
+      }
+
+      if (result == "FAILED" || ++wait_ticks_ > 60) {
+        wm_->setPartStatus(part_, PartStatus::LOST);
+        RCLCPP_WARN(
+          logger_,
+          "[PLACE]   %s: FAILED -- part returned to locate/pick workflow",
+          prettyPart(part_, roles_).c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+
+      return BT::NodeStatus::RUNNING;
+    }
+
+    void onHalted() override {}
+
+  private:
+    WorldModelPtr wm_;
+    SkillBridgePtr bridge_;
+    RolesMapPtr roles_;
+    rclcpp::Logger logger_;
+    std::string part_;
+    std::string command_id_;
+    int wait_ticks_{0};
+  };
+
+  class VLADecide : public BT::StatefulActionNode
+  {
+  public:
+    VLADecide(const std::string & name, const BT::NodeConfig & config,
+              rclcpp::Node::SharedPtr node, SkillBridgePtr bridge,
+              WorldModelPtr wm, RolesMapPtr roles)
+    : BT::StatefulActionNode(name, config),
+      node_(node), bridge_(bridge), wm_(wm), roles_(roles)
+    {
+      decision_sub_ = node_->create_subscription<std_msgs::msg::String>(
+        "/vla/decision", 10,
+        [this](const std_msgs::msg::String::SharedPtr msg) {
+          latest_decision_ = msg->data;
+        });
+    }
+
+    static BT::PortsList providedPorts() { return {}; }
+
+    BT::NodeStatus onStart() override
+    {
+      RCLCPP_INFO(node_->get_logger(), "[VLADecide] waiting for /vla/decision...");
+      wait_ticks_ = 0;
+      return BT::NodeStatus::RUNNING;
+    }
+
+    BT::NodeStatus onRunning() override
+    {
+      if (latest_decision_.empty()) {
+        if (++wait_ticks_ > 60) {   // 30 s timeout at 2 Hz
+          RCLCPP_WARN(node_->get_logger(), "[VLADecide] timeout waiting for decision");
+          return BT::NodeStatus::FAILURE;
+        }
+        return BT::NodeStatus::RUNNING;
+      }
+
+      RCLCPP_INFO(node_->get_logger(), "[VLADecide] got: %s", latest_decision_.c_str());
+
+      std::istringstream ss(latest_decision_);
+      std::string skill, part;
+      ss >> skill >> part;
+
+      if (skill == "DONE") {
+        latest_decision_.clear();
+        return BT::NodeStatus::SUCCESS;
+      }
+
+      const auto state = wm_->getPartState(part);
+      const auto target = state.position;
+
+      std::transform(skill.begin(), skill.end(), skill.begin(), ::tolower);
+
+      bridge_->send(skill, part, target);
+      latest_decision_.clear();
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    void onHalted() override {}
+
+  private:
+    rclcpp::Node::SharedPtr node_;
+    SkillBridgePtr bridge_;
+    WorldModelPtr wm_;
+    RolesMapPtr roles_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr decision_sub_;
+    std::string latest_decision_;
+    int wait_ticks_{0};
+  };
+
+  class FlipPart : public BT::StatefulActionNode
+  {
+  public:
+    FlipPart(const std::string & name, const BT::NodeConfig & config,
+            WorldModelPtr wm, SkillBridgePtr bridge,
+            RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::StatefulActionNode(name, config),
+      wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
+
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
+
+    BT::NodeStatus onStart() override
+    {
+      getInput("part", part_);
+      const auto state = wm_->getPartState(part_);
+
+      attempt_ = wm_->incrementFlipAttempts(part_);
+      command_id_ = bridge_->send("flip", part_, state.position);
+
+      RCLCPP_INFO(
+        logger_,
+        "[FLIP]    %s: attempt %d (was %s)  [%s]",
+        prettyPart(part_, roles_).c_str(),
+        attempt_,
+        zebra_bt::toString(state.orientation).c_str(),
+        command_id_.c_str());
+
+      wait_ticks_ = 0;
+      return BT::NodeStatus::RUNNING;
+    }
+
+    BT::NodeStatus onRunning() override
+    {
+      const std::string result = bridge_->status(command_id_);
+
+      if (result == "SUCCEEDED") {
+        wm_->setOrientation(part_, Orientation::UPRIGHT);
+        wm_->resetFlipAttempts(part_);
+        RCLCPP_INFO(logger_, "[FLIP]    %s: SUCCESS (attempt %d)",
+                    prettyPart(part_, roles_).c_str(), attempt_);
+        return BT::NodeStatus::SUCCESS;
+      }
+
+      if (result == "FAILED") {
+        const std::string reason_code = bridge_->reason(command_id_);
+        const std::string message_txt = bridge_->message(command_id_);
+
+        if (reason_code == "NO_FLIP_PLAN") {
+          wm_->setPartStatus(part_, PartStatus::ESCALATED);
+          RCLCPP_ERROR(logger_, "[FLIP]    %s: PERMANENT FAILURE -- %s",
+                      prettyPart(part_, roles_).c_str(), message_txt.c_str());
+          return BT::NodeStatus::FAILURE;
+        }
+
+        RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- %s",
+                    prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
+        return BT::NodeStatus::FAILURE;
+      }
+
+      if (++wait_ticks_ > 240) {
+        RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- timeout after 120s",
+                    prettyPart(part_, roles_).c_str(), attempt_);
+        return BT::NodeStatus::FAILURE;
+      }
+
+      return BT::NodeStatus::RUNNING;
+    }
+
+    void onHalted() override {}
 
   private:
     WorldModelPtr wm_;
@@ -597,233 +822,75 @@ public:
     std::string command_id_;
     int attempt_{0};
     int wait_ticks_{0};
-};
+  };
 
-class PlacePart : public BT::StatefulActionNode
-{
-public:
-  PlacePart(const std::string & name, const BT::NodeConfig & config,
-            WorldModelPtr wm, SkillBridgePtr bridge,
-            RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::StatefulActionNode(name, config),
-    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus onStart() override
+  class RotatePart : public BT::StatefulActionNode
   {
-    getInput("part", part_);
-    const auto state = wm_->getPartState(part_);
+  public:
+    RotatePart(const std::string & name, const BT::NodeConfig & config,
+              WorldModelPtr wm, SkillBridgePtr bridge,
+              RolesMapPtr roles, rclcpp::Logger logger)
+    : BT::StatefulActionNode(name, config),
+      wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
 
-    if (state.status != PartStatus::PICKED) {
-      RCLCPP_ERROR(
-        logger_,
-        "[PLACE]   %s: CANNOT place - part is not currently held",
-        prettyPart(part_, roles_).c_str());
-      return BT::NodeStatus::FAILURE;
-    }
-    
-    const auto place_target = placeTargetFor(part_);
-    command_id_ = bridge_->send("place", part_, place_target);
-    RCLCPP_INFO(
-      logger_,
-      "[PLACE]   %s: placing at (%.2f, %.2f, %.2f)  [%s]",
-      prettyPart(part_, roles_).c_str(),
-      place_target.x, place_target.y, place_target.z,
-      command_id_.c_str());
+    static BT::PortsList providedPorts()
+    { return {BT::InputPort<std::string>("part")}; }
 
-    wait_ticks_ = 0;
-    return BT::NodeStatus::RUNNING;
-  }
+    BT::NodeStatus onStart() override
+    {
+      getInput("part", part_);
+      const auto state = wm_->getPartState(part_);
 
-  BT::NodeStatus onRunning() override
-  {
-    const std::string result = bridge_->status(command_id_);
+      attempt_ = wm_->incrementRotateAttempts(part_);
+      command_id_ = bridge_->send("rotate", part_, state.position);
 
-    if (result == "SUCCEEDED") {
-      wm_->setPartStatus(part_, PartStatus::PLACED);
       RCLCPP_INFO(
         logger_,
-        "[PLACE]   %s: SUCCESS -- part is on the zebra",
-        prettyPart(part_, roles_).c_str());
-      return BT::NodeStatus::SUCCESS;
+        "[ROTATE]  %s: attempt %d (was %s)  [%s]",
+        prettyPart(part_, roles_).c_str(),
+        attempt_,
+        zebra_bt::toString(state.facing).c_str(),
+        command_id_.c_str());
+
+      wait_ticks_ = 0;
+      return BT::NodeStatus::RUNNING;
     }
 
-    if (result == "FAILED" || ++wait_ticks_ > 60) {
-      wm_->setPartStatus(part_, PartStatus::LOST);
-      RCLCPP_WARN(
-        logger_,
-        "[PLACE]   %s: FAILED -- part returned to locate/pick workflow",
-        prettyPart(part_, roles_).c_str());
-      return BT::NodeStatus::FAILURE;
-    }
+    BT::NodeStatus onRunning() override
+    {
+      const std::string result = bridge_->status(command_id_);
 
-    return BT::NodeStatus::RUNNING;
-  }
+      if (result == "SUCCEEDED") {
+        wm_->setFacing(part_, Facing::FORWARD);
+        wm_->resetRotateAttempts(part_);
+        RCLCPP_INFO(logger_, "[ROTATE]  %s: SUCCESS (attempt %d)",
+                    prettyPart(part_, roles_).c_str(), attempt_);
+        return BT::NodeStatus::SUCCESS;
+      }
 
-  void onHalted() override {}
-
-private:
-  WorldModelPtr wm_;
-  SkillBridgePtr bridge_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-  std::string part_;
-  std::string command_id_;
-  int wait_ticks_{0};
-};
-
-class FlipPart : public BT::StatefulActionNode
-{
-public:
-  FlipPart(const std::string & name, const BT::NodeConfig & config,
-           WorldModelPtr wm, SkillBridgePtr bridge,
-           RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::StatefulActionNode(name, config),
-    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus onStart() override
-  {
-    getInput("part", part_);
-    const auto state = wm_->getPartState(part_);
-
-    attempt_ = wm_->incrementFlipAttempts(part_);
-    command_id_ = bridge_->send("flip", part_, state.position);
-
-    RCLCPP_INFO(
-      logger_,
-      "[FLIP]    %s: attempt %d (was %s)  [%s]",
-      prettyPart(part_, roles_).c_str(),
-      attempt_,
-      zebra_bt::toString(state.orientation).c_str(),
-      command_id_.c_str());
-
-    wait_ticks_ = 0;
-    return BT::NodeStatus::RUNNING;
-  }
-
-  BT::NodeStatus onRunning() override
-  {
-    const std::string result = bridge_->status(command_id_);
-
-    if (result == "SUCCEEDED") {
-      wm_->setOrientation(part_, Orientation::UPRIGHT);
-      wm_->resetFlipAttempts(part_);
-      RCLCPP_INFO(logger_, "[FLIP]    %s: SUCCESS (attempt %d)",
-                  prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::SUCCESS;
-    }
-
-    if (result == "FAILED") {
-      const std::string reason_code = bridge_->reason(command_id_);
-      const std::string message_txt = bridge_->message(command_id_);
-
-      if (reason_code == "NO_FLIP_PLAN") {
-        // No flip fits the current pose — retrying without moving the brick won't help
-        wm_->setPartStatus(part_, PartStatus::ESCALATED);
-        RCLCPP_ERROR(logger_, "[FLIP]    %s: PERMANENT FAILURE -- %s",
-                     prettyPart(part_, roles_).c_str(), message_txt.c_str());
+      if (result == "FAILED" || ++wait_ticks_ > 60) {
+        RCLCPP_WARN(logger_, "[ROTATE]  %s: FAILED (attempt %d)",
+                    prettyPart(part_, roles_).c_str(), attempt_);
         return BT::NodeStatus::FAILURE;
       }
 
-      RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- %s",
-                  prettyPart(part_, roles_).c_str(), attempt_, message_txt.c_str());
-      return BT::NodeStatus::FAILURE;
+      return BT::NodeStatus::RUNNING;
     }
 
-    if (++wait_ticks_ > 240) {
-      RCLCPP_WARN(logger_, "[FLIP]    %s: FAILED (attempt %d) -- timeout after 120s",
-                  prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::FAILURE;
-    }
+    void onHalted() override {}
 
-    return BT::NodeStatus::RUNNING;
-  }
+  private:
+    WorldModelPtr wm_;
+    SkillBridgePtr bridge_;
+    RolesMapPtr roles_;
+    rclcpp::Logger logger_;
+    std::string part_;
+    std::string command_id_;
+    int attempt_{0};
+    int wait_ticks_{0};
+  };
 
-  void onHalted() override {}
-
-private:
-  WorldModelPtr wm_;
-  SkillBridgePtr bridge_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-  std::string part_;
-  std::string command_id_;
-  int attempt_{0};
-  int wait_ticks_{0};
-};
-
-class RotatePart : public BT::StatefulActionNode
-{
-public:
-  RotatePart(const std::string & name, const BT::NodeConfig & config,
-             WorldModelPtr wm, SkillBridgePtr bridge,
-             RolesMapPtr roles, rclcpp::Logger logger)
-  : BT::StatefulActionNode(name, config),
-    wm_(wm), bridge_(bridge), roles_(roles), logger_(logger) {}
-
-  static BT::PortsList providedPorts()
-  { return {BT::InputPort<std::string>("part")}; }
-
-  BT::NodeStatus onStart() override
-  {
-    getInput("part", part_);
-    const auto state = wm_->getPartState(part_);
-
-    attempt_ = wm_->incrementRotateAttempts(part_);
-    command_id_ = bridge_->send("rotate", part_, state.position);
-
-    RCLCPP_INFO(
-      logger_,
-      "[ROTATE]  %s: attempt %d (was %s)  [%s]",
-      prettyPart(part_, roles_).c_str(),
-      attempt_,
-      zebra_bt::toString(state.facing).c_str(),
-      command_id_.c_str());
-
-    wait_ticks_ = 0;
-    return BT::NodeStatus::RUNNING;
-  }
-
-  BT::NodeStatus onRunning() override
-  {
-    const std::string result = bridge_->status(command_id_);
-
-    if (result == "SUCCEEDED") {
-      wm_->setFacing(part_, Facing::FORWARD);
-      wm_->resetRotateAttempts(part_);
-      RCLCPP_INFO(logger_, "[ROTATE]  %s: SUCCESS (attempt %d)",
-                  prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::SUCCESS;
-    }
-
-    if (result == "FAILED" || ++wait_ticks_ > 60) {
-      RCLCPP_WARN(logger_, "[ROTATE]  %s: FAILED (attempt %d)",
-                  prettyPart(part_, roles_).c_str(), attempt_);
-      return BT::NodeStatus::FAILURE;
-    }
-
-    return BT::NodeStatus::RUNNING;
-  }
-
-  void onHalted() override {}
-
-private:
-  WorldModelPtr wm_;
-  SkillBridgePtr bridge_;
-  RolesMapPtr roles_;
-  rclcpp::Logger logger_;
-  std::string part_;
-  std::string command_id_;
-  int attempt_{0};
-  int wait_ticks_{0};
-};
-
-class RecoveryPolicy : public BT::DecoratorNode
+  class RecoveryPolicy : public BT::DecoratorNode
 {
 public:
   RecoveryPolicy(const std::string & name, const BT::NodeConfig & config,
@@ -1047,6 +1114,12 @@ int main(int argc, char ** argv)
     (const std::string & n, const BT::NodeConfig & c) {
       return std::make_unique<zebra_bt::PlacePart>(
         n, c, world_model, skill_bridge, roles, node->get_logger()); });
+
+  factory.registerBuilder<zebra_bt::VLADecide>("VLADecide",
+    [node, skill_bridge, world_model, roles]
+    (const std::string & n, const BT::NodeConfig & c) {
+      return std::make_unique<zebra_bt::VLADecide>(
+        n, c, node, skill_bridge, world_model, roles); });
 
   factory.registerBuilder<zebra_bt::FlipPart>("FlipPart",
     [world_model, skill_bridge, roles, node]
