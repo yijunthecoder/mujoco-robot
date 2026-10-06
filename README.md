@@ -1,5 +1,7 @@
 # mujoco-robot
 
+> **Taking this over?** Start with [HANDOVER.md](HANDOVER.md): what works, how to run and check it, known problems, and what to replace for the real robot.
+
 Reusable scaffolding for loading and viewing robot models from
 [mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie),
 with automatic rendering-backend fallback for WSL2 — plus the stationlite
@@ -545,14 +547,20 @@ mujoco-robot/
 │   ├── camera_calibration.py      # aligns the 4 stationlite cameras into one shared frame
 │   ├── zebra_pick_place.py        # grasp/place one zebra brick via runtime IK
 │   ├── zebra_publisher.py         # perception: calibrated brick position -> ROS2
-│   ├── scatter.py                 # random brick start spots / drops, inside the arm's reach zone
+│   ├── scatter.py                 # brick starts: placed in the work box, dropped, or upright
+│   ├── arm_clearance.py           # refuses moves that come too close to the other arm or other bricks
+│   ├── sim_sensing.py             # the simulated "senses" - the module to replace on the real robot
+│   ├── sim_step.py                # one control tick = several physics substeps
+│   ├── move_check.py              # --confirm-moves: show each move and ask before it runs
 │   ├── zebra_facing.py            # picks a brick so its print faces a set way on the stack
 │   ├── zebra_flip.py              # turns a brick that isn't upright onto its studs (one hand or two)
 │   └── zebra_skill_bridge.py      # executes zebra_bt pick/place/flip commands + publishes perception
 ├── scripts/                       # CLI entry points for each module above, plus:
 │   ├── check_camera_agreement.py  # headless check: every camera agrees with ground truth
 │   ├── reach_map.py               # where each arm can pick+place; writes the scatter zones
-│   └── run_zebra.sh               # one-command launcher: zebra_bt + skill bridge
+│   ├── run_zebra.sh               # one-command launcher: zebra_bt + skill bridge
+│   ├── check_demos.sh             # runs demos 1-5 headless with zebra_bt and reports (run after changes)
+│   └── demo_report.py             # the report: full zebra?, flips, placement accuracy, problems
 ├── stationlite/                   # stationlite URDF, meshes, and the MuJoCo scene XML
 └── requirements.txt
 ```
