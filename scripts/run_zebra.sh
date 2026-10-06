@@ -49,10 +49,25 @@ export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 cd "$(dirname "$0")/.."
 
-if [ $vla = 1 ]; then
-  python3 -u "$planner" 2>&1 | sed -u 's/^/[vla]    /' &
-fi
-ros2 run build_a_zebra zebra_bt_node 2>&1 | sed -u 's/^/[tree]   /' &
-trap 'pkill -P $$ 2>/dev/null; pkill -f zebra_bt_node 2>/dev/null; pkill -f vla_planner_node 2>/dev/null' EXIT
+trap 'pkill -P $$ 2>/dev/null; pkill -f zebra_bt_node 2>/dev/null; pkill -f vla_planner_node 2>/dev/null; rm -f "$ready"' EXIT
 
-python3 -u scripts/zebra_skill_bridge.py "${args[@]}" 2>&1 | sed -u 's/^/[bridge] /'
+if [ $vla = 0 ]; then
+  ros2 run build_a_zebra zebra_bt_node 2>&1 | sed -u 's/^/[tree]   /' &
+  python3 -u scripts/zebra_skill_bridge.py "${args[@]}" 2>&1 | sed -u 's/^/[bridge] /'
+  exit
+fi
+
+# --vla: the tree asks the planner as soon as it starts, and the planner drops a request
+# that comes before the first camera picture (VLADecide then waits out its 60 s timeout).
+# The bridge only publishes pictures once its cameras are calibrated (~20 s) - so start
+# the planner and the bridge first, and the tree once the bridge says it's ready.
+python3 -u "$planner" 2>&1 | sed -u 's/^/[vla]    /' &
+ready=$(mktemp)
+python3 -u scripts/zebra_skill_bridge.py "${args[@]}" 2>&1 | sed -u 's/^/[bridge] /' | tee "$ready" &
+bridge=$!
+until grep -q "Ready - watching" "$ready"; do
+  kill -0 $bridge 2>/dev/null || exit 1  # the bridge stopped before it was ready (its error is above)
+  sleep 0.5
+done
+ros2 run build_a_zebra zebra_bt_node 2>&1 | sed -u 's/^/[tree]   /' &
+wait $bridge  # closing the MuJoCo window (or Ctrl+C) ends the bridge, then everything else
