@@ -685,10 +685,25 @@ namespace zebra_bt
     : BT::StatefulActionNode(name, config),
       node_(node), bridge_(bridge), wm_(wm), roles_(roles)
     {
+      // Publisher for requesting a VLA decision
+      request_pub_ = node_->create_publisher<std_msgs::msg::String>(
+        "/vla/request", 10);
+
+      // Subscriber for receiving the VLA decision.
+      // Only accept replies whose request_id matches the outstanding request.
       decision_sub_ = node_->create_subscription<std_msgs::msg::String>(
         "/vla/decision", 10,
         [this](const std_msgs::msg::String::SharedPtr msg) {
-          latest_decision_ = msg->data;
+          try {
+            const auto payload = nlohmann::json::parse(msg->data);
+            const std::string rid = payload.at("request_id").get<std::string>();
+            if (rid != pending_request_id_) {
+              return;   // stale reply for a previous request — drop it
+            }
+            latest_decision_ = payload.at("decision").get<std::string>();
+          } catch (const std::exception &) {
+            // Ignore malformed replies.
+          }
         });
     }
 
@@ -703,7 +718,31 @@ namespace zebra_bt
       current_part_.clear();
       state_ = WAITING_FOR_DECISION;
       wait_ticks_ = 0;
-      RCLCPP_INFO(node_->get_logger(), "[VLADecide] waiting for /vla/decision...");
+
+      std::string expected_part;
+      getInput("part", expected_part);
+
+      // Fresh request id so stale replies can be dropped
+      request_id_ = "vla-" + std::to_string(++next_request_id_);
+      pending_request_id_ = request_id_;
+
+      const auto state = wm_->getPartState(expected_part);
+
+      nlohmann::json req_json = {
+        {"request_id",  request_id_},
+        {"part_id",     expected_part},
+        {"status",      zebra_bt::toString(state.status)},
+        {"orientation", zebra_bt::toString(state.orientation)},
+        {"facing",      zebra_bt::toString(state.facing)}
+      };
+
+      std_msgs::msg::String req;
+      req.data = req_json.dump();
+      request_pub_->publish(req);
+
+      RCLCPP_INFO(node_->get_logger(),
+                  "[VLADecide] requested decision for %s [%s]",
+                  expected_part.c_str(), request_id_.c_str());
       return BT::NodeStatus::RUNNING;
     }
 
@@ -724,7 +763,12 @@ namespace zebra_bt
         std::string skill, part;
         ss >> skill >> part;
 
-        if (skill == "DONE") {
+        // Normalize before comparing so "done" / "DONE" both work
+        std::string skill_upper = skill;
+        std::transform(skill_upper.begin(), skill_upper.end(),
+                      skill_upper.begin(), ::toupper);
+
+        if (skill_upper == "DONE") {
           latest_decision_.clear();
           return BT::NodeStatus::SUCCESS;
         }
@@ -767,12 +811,59 @@ namespace zebra_bt
       const std::string result = bridge_->status(command_id_);
 
       if (result == "SUCCEEDED") {
-        RCLCPP_INFO(node_->get_logger(), "[VLADecide] %s succeeded", command_id_.c_str());
-        return BT::NodeStatus::SUCCESS;
+        RCLCPP_INFO(node_->get_logger(),
+                    "[VLADecide] %s succeeded", command_id_.c_str());
+
+        // Mirror what PickPart / PlacePart / FlipPart / RotatePart do,
+        // so WorldModel stays the source of truth for the tree.
+        if (current_skill_ == "pick") {
+          wm_->setPartStatus(current_part_, PartStatus::PICKED);
+          wm_->resetPickAttempts(current_part_);
+        } else if (current_skill_ == "place") {
+          wm_->setPartStatus(current_part_, PartStatus::PLACED);
+        } else if (current_skill_ == "flip") {
+          wm_->setOrientation(current_part_, Orientation::UPRIGHT);
+          wm_->resetFlipAttempts(current_part_);
+        } else if (current_skill_ == "rotate") {
+          wm_->setFacing(current_part_, Facing::FORWARD);
+          wm_->resetRotateAttempts(current_part_);
+        }
+
+        // Part is fully done — let the tree advance.
+        if (wm_->getPartState(current_part_).status == PartStatus::PLACED) {
+          return BT::NodeStatus::SUCCESS;
+        }
+
+        // Otherwise: ask the planner for the next skill on the same part.
+        latest_decision_.clear();
+        state_ = WAITING_FOR_DECISION;
+        wait_ticks_ = 0;
+
+        request_id_ = "vla-" + std::to_string(++next_request_id_);
+        pending_request_id_ = request_id_;
+
+        const auto state = wm_->getPartState(current_part_);
+        nlohmann::json req_json = {
+          {"request_id",  request_id_},
+          {"part_id",     current_part_},
+          {"status",      zebra_bt::toString(state.status)},
+          {"orientation", zebra_bt::toString(state.orientation)},
+          {"facing",      zebra_bt::toString(state.facing)}
+        };
+        std_msgs::msg::String req;
+        req.data = req_json.dump();
+        request_pub_->publish(req);
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "[VLADecide] %s done, asking for next skill on %s [%s]",
+                    current_skill_.c_str(), current_part_.c_str(),
+                    request_id_.c_str());
+        return BT::NodeStatus::RUNNING;
       }
 
       if (result == "FAILED" || ++wait_ticks_ > 180) {
-        RCLCPP_WARN(node_->get_logger(), "[VLADecide] %s failed", command_id_.c_str());
+        RCLCPP_WARN(node_->get_logger(),
+                    "[VLADecide] %s failed", command_id_.c_str());
 
         // Set the status so RecoveryManager can decide what to do
         if (current_skill_ == "place") {
@@ -785,6 +876,7 @@ namespace zebra_bt
 
       return BT::NodeStatus::RUNNING;
     }
+
     void onHalted() override {}
 
   private:
@@ -792,10 +884,17 @@ namespace zebra_bt
     Phase state_{WAITING_FOR_DECISION};
 
     rclcpp::Node::SharedPtr node_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr request_pub_;
     SkillBridgePtr bridge_;
     WorldModelPtr wm_;
     RolesMapPtr roles_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr decision_sub_;
+
+    // Request / response correlation
+    std::string request_id_;          // id of the request we just sent
+    std::string pending_request_id_;  // id we are currently waiting on
+    static inline unsigned long next_request_id_{0};
+
     std::string latest_decision_;
     std::string current_skill_;
     std::string current_part_;
