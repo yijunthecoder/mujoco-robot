@@ -741,8 +741,16 @@ namespace zebra_bt
       request_pub_->publish(req);
 
       RCLCPP_INFO(node_->get_logger(),
-                  "[VLADecide] requested decision for %s [%s]",
-                  expected_part.c_str(), request_id_.c_str());
+        "[VLADecide] ── request %s ──\n"
+        "  part        : %s\n"
+        "  status      : %s\n"
+        "  orientation : %s\n"
+        "  facing      : %s",
+        request_id_.c_str(),
+        expected_part.c_str(),
+        zebra_bt::toString(state.status).c_str(),
+        zebra_bt::toString(state.orientation).c_str(),
+        zebra_bt::toString(state.facing).c_str());
       return BT::NodeStatus::RUNNING;
     }
 
@@ -753,11 +761,16 @@ namespace zebra_bt
         if (latest_decision_.empty()) {
           if (++wait_ticks_ > 120) {
             RCLCPP_WARN(node_->get_logger(),
-                        "[VLADecide] timeout waiting for decision");
+                        "[VLADecide] timeout waiting for decision [%s]",
+                        request_id_.c_str());
             return BT::NodeStatus::FAILURE;
           }
           return BT::NodeStatus::RUNNING;
         }
+
+        RCLCPP_INFO(node_->get_logger(),
+          "[VLADecide] ── decision %s ── raw='%s'",
+          request_id_.c_str(), latest_decision_.c_str());
 
         std::istringstream ss(latest_decision_);
         std::string skill, part;
@@ -769,6 +782,9 @@ namespace zebra_bt
                       skill_upper.begin(), ::toupper);
 
         if (skill_upper == "DONE") {
+          RCLCPP_INFO(node_->get_logger(),
+            "[VLADecide] ── DONE for %s [%s]",
+            part.c_str(), request_id_.c_str());
           latest_decision_.clear();
           return BT::NodeStatus::SUCCESS;
         }
@@ -799,8 +815,13 @@ namespace zebra_bt
         const std::string facing = (skill == "pick") ? "FORWARD" : "";
         command_id_ = bridge_->send(skill, part, target, facing);
 
-        RCLCPP_INFO(node_->get_logger(), "[VLADecide] sent %s for %s [%s]",
-                    skill.c_str(), part.c_str(), command_id_.c_str());
+        RCLCPP_INFO(node_->get_logger(),
+          "[VLADecide] ── action ── skill=%s part=%s target=(%.3f, %.3f, %.3f)"
+          " facing='%s' cmd=%s",
+          skill.c_str(), part.c_str(),
+          target.x, target.y, target.z,
+          facing.c_str(),
+          command_id_.c_str());
 
         latest_decision_.clear();
         state_ = WAITING_FOR_RESULT;
@@ -812,10 +833,7 @@ namespace zebra_bt
       const std::string result = bridge_->status(command_id_);
 
       if (result == "SUCCEEDED") {
-        RCLCPP_INFO(node_->get_logger(),
-                    "[VLADecide] %s succeeded", command_id_.c_str());
-
-        // Mirror what PickPart / PlacePart / FlipPart / RotatePart do,
+        // Mirror what PickPart / PlacePart / FlipPart do,
         // so WorldModel stays the source of truth for the tree.
         if (current_skill_ == "pick") {
           wm_->setPartStatus(current_part_, PartStatus::PICKED);
@@ -829,6 +847,11 @@ namespace zebra_bt
           wm_->setFacing(current_part_, Facing::FORWARD);
           wm_->resetRotateAttempts(current_part_);
         }
+
+        RCLCPP_INFO(node_->get_logger(),
+          "[VLADecide] ── result %s: SUCCEEDED (part now %s)",
+          command_id_.c_str(),
+          zebra_bt::toString(wm_->getPartState(current_part_).status).c_str());
 
         // Part is fully done — let the tree advance.
         if (wm_->getPartState(current_part_).status == PartStatus::PLACED) {
@@ -856,15 +879,29 @@ namespace zebra_bt
         request_pub_->publish(req);
 
         RCLCPP_INFO(node_->get_logger(),
-                    "[VLADecide] %s done, asking for next skill on %s [%s]",
-                    current_skill_.c_str(), current_part_.c_str(),
-                    request_id_.c_str());
+          "[VLADecide] ── request %s ──\n"
+          "  part        : %s\n"
+          "  status      : %s\n"
+          "  orientation : %s\n"
+          "  facing      : %s",
+          request_id_.c_str(),
+          current_part_.c_str(),
+          zebra_bt::toString(state.status).c_str(),
+          zebra_bt::toString(state.orientation).c_str(),
+          zebra_bt::toString(state.facing).c_str());
         return BT::NodeStatus::RUNNING;
       }
 
       if (result == "FAILED" || ++wait_ticks_ > 180) {
+        const std::string reason_code = bridge_->reason(command_id_);
+        const std::string message_txt = bridge_->message(command_id_);
+
         RCLCPP_WARN(node_->get_logger(),
-                    "[VLADecide] %s failed", command_id_.c_str());
+          "[VLADecide] ── result %s: %s (reason='%s' msg='%s')",
+          command_id_.c_str(),
+          result.empty() ? "TIMEOUT" : result.c_str(),
+          reason_code.c_str(),
+          message_txt.c_str());
 
         // Set the status so RecoveryManager can decide what to do
         if (current_skill_ == "place") {
