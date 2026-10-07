@@ -19,11 +19,12 @@
 #
 # --vla: Victor's tree where a vision-language model (Gemini) picks each next skill
 # from the head-camera picture (VLADecide <-> his vla_planner_node.py, /vla/request and
-# /vla/decision). It runs his VLA version from its own workspace, ~/ros2_ws_vla (the
-# version is in ~/ros2_ws_vla/src/build_a_zebra/VICTOR_COMMIT), plus his planner, which
-# needs a Google API key in ~/ros2_ws_vla/src/build_a_zebra/scripts/apikeys.py
-# (GOOGLE_API_KEY = "..."; not in git - ask Victor). Without --vla: his tree without the
-# VLA from ~/ros2_ws, as before (and as scripts/check_demos.sh uses). Labelled [vla].
+# /vla/decision). It runs his VLA version from $ZEBRA_VLA_WS if set, else ~/ros2_ws_vla,
+# else ~/ros2_ws if that has his VLA version (vla_planner_node.py), plus his planner,
+# which needs a Google API key in apikeys.py next to vla_planner_node.py
+# (GOOGLE_API_KEY = "..."; not in git). Setup: HANDOVER.md section 2. Without --vla:
+# his tree without the VLA from ~/ros2_ws, as before (and as scripts/check_demos.sh
+# uses). Labelled [vla].
 
 # --vla is ours; every other argument goes to the bridge
 vla=0
@@ -33,14 +34,29 @@ for a in "$@"; do
 done
 ws=~/ros2_ws
 if [ $vla = 1 ]; then
-  ws=~/ros2_ws_vla
-  planner=$ws/src/build_a_zebra/scripts/vla_planner_node.py
-  if [ ! -f "$ws/install/setup.bash" ]; then
-    echo "--vla: no $ws - build Victor's VLA version there first (see HANDOVER.md)"; exit 1
+  # the workspace with his VLA version: $ZEBRA_VLA_WS if set, else ~/ros2_ws_vla, else
+  # ~/ros2_ws when that one already has it (e.g. on Victor's own machine)
+  ws=${ZEBRA_VLA_WS:-}
+  if [ -z "$ws" ]; then
+    for w in ~/ros2_ws_vla ~/ros2_ws; do
+      if [ -f "$w/install/setup.bash" ] && [ -n "$(find "$w/src" -name vla_planner_node.py -print -quit 2>/dev/null)" ]; then
+        ws=$w; break
+      fi
+    done
+  fi
+  if [ -z "$ws" ] || [ ! -f "$ws/install/setup.bash" ]; then
+    echo "--vla: no built workspace with Victor's VLA version (vla_planner_node.py) in ~/ros2_ws_vla or ~/ros2_ws"
+    echo "       build it (HANDOVER.md section 2, 'With the VLA'), or point to yours: ZEBRA_VLA_WS=~/my_ws bash scripts/run_zebra.sh --vla"
+    exit 1
+  fi
+  planner=$(find "$ws/src" -name vla_planner_node.py -print -quit 2>/dev/null)
+  if [ -z "$planner" ]; then
+    echo "--vla: $ws has no vla_planner_node.py - is Victor's VLA version (commit 5df401e or newer) in $ws/src?"; exit 1
   fi
   if [ ! -f "$(dirname "$planner")/apikeys.py" ]; then
-    echo "--vla: no $(dirname "$planner")/apikeys.py - put GOOGLE_API_KEY = \"...\" in it (ask Victor)"; exit 1
+    echo "--vla: no $(dirname "$planner")/apikeys.py - put GOOGLE_API_KEY = \"...\" in it (your own Google AI Studio key)"; exit 1
   fi
+  echo "--vla: workspace $ws, planner $planner"
 fi
 
 source /opt/ros/humble/setup.bash

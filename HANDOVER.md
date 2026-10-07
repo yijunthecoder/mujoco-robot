@@ -47,6 +47,39 @@ problems) - "5 of 5 built a full zebra" means nothing broke.
 Other starts (not the demos): `--drop` (bricks dropped anywhere in reach, messy),
 `--upright`, `--random`, `--scatter SEED` - see README.
 
+### With the VLA (Victor's Gemma version)
+
+`bash scripts/run_zebra.sh --vla --demo 1` runs Victor's VLA tree instead: a
+vision-language model (Gemma `gemma-4-26b-a4b-it`, through Google's API) looks at the
+head-camera picture (the bridge publishes it on `/camera/image_raw`, 640x480, once a
+second) and picks each next skill (his `vla_planner_node.py`, over `/vla/request` and
+`/vla/decision`). Our bridge is the same as without `--vla`. Tested 2026-10-06: 5/5
+demos at 1x, ~6 min each.
+
+Setup, once (WSL, ROS2 Humble):
+
+```bash
+# 1. a workspace with Victor's VLA version (commit 5df401e or newer, branch Victor)
+mkdir -p ~/ros2_ws_vla/src/build_a_zebra
+cd /mnt/c/intern/mujoco-robot && git fetch origin
+git archive origin/Victor build_a_zebra | tar -x -C ~/ros2_ws_vla/src/build_a_zebra --strip-components=1
+cd ~/ros2_ws_vla && source /opt/ros/humble/setup.bash && colcon build --packages-select build_a_zebra
+# 2. the planner's Python library
+pip install --user google-genai
+# 3. your own Google AI Studio key, in a file next to vla_planner_node.py (never commit it)
+echo 'GOOGLE_API_KEY = "..."' > ~/ros2_ws_vla/src/build_a_zebra/scripts/apikeys.py
+```
+
+The script looks for the workspace in this order: `$ZEBRA_VLA_WS`, `~/ros2_ws_vla`,
+then `~/ros2_ws` if it already has `vla_planner_node.py` (so on a machine where
+`~/ros2_ws` is already the VLA version, nothing extra is needed). Other folder:
+`ZEBRA_VLA_WS=~/my_ws bash scripts/run_zebra.sh --vla --demo 1`. It prints which
+workspace and planner it uses.
+
+Good to know: only **one** `run_zebra.sh` at a time (both use ROS domain 42 and get in
+each other's way); Google often answers with error 500 - the planner retries 3 times;
+`gemini-2.5-flash` is closed to new keys, which is why it's Gemma.
+
 ## 3. What works (checked 2026-10-05)
 
 | demo | legs | body | head |
